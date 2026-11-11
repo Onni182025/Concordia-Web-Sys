@@ -1,0 +1,354 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  ACCOUNTING
+  FARM_WH_SUPERVISOR
+  FARM_WH_PERSONNEL
+  ENGINEERING_SUPERVISOR
+  ENGINEERING_WH_PERSONNEL
+  SALES_MANAGER
+  EGG_ROOM_SUPERVISOR
+  SALES_SUPERVISOR
+  ADMIN_SUPERVISOR
+  HR_SUPERVISOR
+  MARKETING_SUPERVISOR
+  PROCESS_ENGINEER
+  EGG_ROOM_STAFF
+  SALES_STAFF
+  ADMIN_STAFF
+  HR_ASSISTANT
+  MARKETING_OFFICER
+  MARKETING_STAFF
+  PROCESS_ANALYST
+  STAFF
+}
+
+enum Warehouse {
+  ENGINEERING
+  FARM
+}
+
+enum RequestType {
+  MRRF // Maintenance Repair Request Form
+  EPRF // Engineering Project Request Form
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum WorkOrderStatus {
+  PENDING
+  APPROVED
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+}
+
+enum MRSStatus {
+  PENDING
+  APPROVED
+  ISSUED
+  FULFILLED
+  REJECTED
+}
+
+enum PurposeCategory {
+  REPAIR
+  FABRICATION
+  CONSUMABLE
+  SPARE_PARTS
+  OTHER
+}
+
+enum MovementType {
+  RECEIVING
+  ISSUANCE
+  RESTOCK
+  ADJUSTMENT
+  TRANSFER
+}
+
+enum PurchaseRequisitionStatus {
+  PENDING
+  APPROVED
+  ORDERED
+  COMPLETED
+  REJECTED
+}
+
+enum DocumentSeriesType {
+  WORK_ORDER
+  MRS
+  RECEIVING
+}
+
+enum ReceivingAttachmentType {
+  DELIVERY_RECEIPT
+  INVOICE
+}
+
+model DocumentSeries {
+  type        DocumentSeriesType @id
+  prefix      String
+  nextNumber  Int                @default(1)
+  padding     Int                @default(4)
+  yearFormat  String?
+  updatedAt   DateTime           @updatedAt
+}
+
+model User {
+  id          String   @id @default(uuid())
+  employeeId  String?  @unique
+  email       String   @unique
+  name        String
+  password    String
+  role        Role     @default(STAFF)
+  department  String?
+  isActive    Boolean  @default(true)
+  sessionVersion Int   @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model RolePermission {
+  id         String   @id @default(uuid())
+  role       Role
+  permission String   @db.VarChar(64)
+  enabled    Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([role, permission])
+  @@index([role, enabled])
+}
+
+model LoginRateLimit {
+  key             String   @id @db.Char(64)
+  failedAttempts  Int      @default(0)
+  windowStartedAt DateTime @default(now())
+  blockedUntil    DateTime?
+  updatedAt       DateTime @updatedAt
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorUserId String?
+  actorName   String
+  action      String
+  entityType  String
+  entityId    String?
+  details     String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([actorUserId, createdAt])
+  @@index([entityType, entityId, createdAt])
+}
+
+model Item {
+  id               String           @id @default(uuid())
+  code             String           @unique
+  name             String
+  description      String?
+  category         String
+  unit             String           // e.g., pcs, meters, sets
+  stocks           WarehouseStock[]
+  workOrderItems   WorkOrderItem[]
+  mrsItems         MRSItem[]
+  receivingItems   ReceivingItem[]
+  movements        StockMovement[]
+  transferItems    StockTransferItem[]
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+}
+
+model StockTransfer {
+  id               String              @id @default(uuid())
+  transferNo       String              @unique
+  mrsNo            String?
+  prPoNo           String?
+  mirrNo           String?
+  transferredFrom  Warehouse
+  transferredTo    Warehouse
+  dateTransferred  DateTime
+  modeOfTransport  String?
+  performedBy      String
+  items            StockTransferItem[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+}
+
+model StockTransferItem {
+  id             String        @id @default(uuid())
+  transferId     String
+  transfer       StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  itemId         String
+  item           Item          @relation(fields: [itemId], references: [id])
+  quantity       Decimal       @db.Decimal(12, 3)
+  unit           String
+}
+
+model WarehouseStock {
+  id            String    @id @default(uuid())
+  itemId        String
+  item          Item      @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  warehouse     Warehouse
+  quantity      Decimal   @default(0.0) @db.Decimal(12, 3)
+  minStockLevel Decimal   @default(5.0) @db.Decimal(12, 3)
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([itemId, warehouse])
+}
+
+model WorkOrder {
+  id               String          @id @default(uuid())
+  woNumber         String          @unique // e.g., WO-2025-0001
+  type             RequestType
+  dateRequested    DateTime        @default(now())
+  dateNeeded       DateTime
+  department       String
+  machineEquipment String
+  areaBuilding     String
+  specification    String          @db.Text
+  description      String          @db.Text
+  priority         Priority        @default(MEDIUM)
+  requestedBy      String          // Free-text
+  status           WorkOrderStatus @default(PENDING)
+  cancelledBy      String?
+  cancelledAt      DateTime?
+  cancelReason     String?         @db.Text
+  createdById      String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  items            WorkOrderItem[]
+  mrsList          MRS[]
+}
+
+model WorkOrderItem {
+  id              String    @id @default(uuid())
+  workOrderId     String
+  workOrder       WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  itemId          String
+  item            Item      @relation(fields: [itemId], references: [id])
+  quantityNeeded  Decimal   @db.Decimal(12, 3)
+  quantityIssued  Decimal   @default(0.0) @db.Decimal(12, 3)
+}
+
+model MRS {
+  id              String          @id @default(uuid())
+  mrsNumber       String          @unique // e.g., MRS-2025-0001
+  workOrderId     String?
+  workOrder       WorkOrder?      @relation(fields: [workOrderId], references: [id])
+  purposeCategory String
+  department      String
+  dateRequested   DateTime
+  dateNeeded      DateTime
+  requestedBy     String          // Free-text
+  preparedBy      String
+  status          MRSStatus       @default(PENDING)
+  cancelledBy     String?
+  cancelledAt     DateTime?
+  cancelReason    String?         @db.Text
+  createdById     String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  items           MRSItem[]
+}
+
+model MRSItem {
+  id                String    @id @default(uuid())
+  mrsId             String
+  mrs               MRS       @relation(fields: [mrsId], references: [id], onDelete: Cascade)
+  itemId            String?
+  item              Item?     @relation(fields: [itemId], references: [id])
+  customItemName    String?
+  description       String?
+  unit              String?
+  purpose           String?
+  notInInventory    Boolean   @default(false)
+  purchaseRequestStatus String?
+  purchaseRequests  PurchaseRequisition[]
+  quantityRequested Decimal  @db.Decimal(12, 3)
+  quantityApproved  Decimal  @default(0.0) @db.Decimal(12, 3)
+  quantityIssued    Decimal  @default(0.0) @db.Decimal(12, 3)
+}
+
+model Receiving {
+  id             String          @id @default(uuid())
+  rrNumber       String          @unique // Receiving Report Number
+  drNumber       String          // Delivery Receipt Number
+  invoiceNumber  String          // Invoice Number
+  warehouse      Warehouse
+  receivedBy     String
+  receivedDate   DateTime        @default(now())
+  drFileUrl      String?         // Simulated file upload
+  invoiceFileUrl String?         // Simulated file upload
+  items          ReceivingItem[]
+  attachments    ReceivingAttachment[]
+  createdAt      DateTime        @default(now())
+}
+
+model ReceivingAttachment {
+  id          String                 @id @default(uuid())
+  receivingId String
+  receiving   Receiving              @relation(fields: [receivingId], references: [id], onDelete: Cascade)
+  type        ReceivingAttachmentType
+  fileName    String
+  mimeType    String
+  data        Bytes
+  createdAt   DateTime               @default(now())
+
+  @@unique([receivingId, type])
+}
+
+model ReceivingItem {
+  id          String    @id @default(uuid())
+  receivingId String
+  receiving   Receiving @relation(fields: [receivingId], references: [id], onDelete: Cascade)
+  itemId      String
+  item        Item      @relation(fields: [itemId], references: [id])
+  qtyReceived Decimal @db.Decimal(12, 3)
+  unitCost    Decimal @default(0.0) @db.Decimal(12, 2)
+}
+
+model PurchaseRequisition {
+  id          String                   @id @default(uuid())
+  prNumber    String                   @unique
+  mrsItemId   String?
+  mrsItem     MRSItem?                 @relation(fields: [mrsItemId], references: [id], onDelete: SetNull)
+  requestedBy String
+  department  String
+  status      PurchaseRequisitionStatus @default(PENDING)
+  remarks     String?                  @db.Text
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+}
+
+model StockMovement {
+  id            String       @id @default(uuid())
+  itemId        String
+  item          Item         @relation(fields: [itemId], references: [id])
+  warehouse     Warehouse
+  quantity      Decimal      @db.Decimal(12, 3) // Positive for additions, negative for deductions
+  quantityAfter Decimal      @db.Decimal(12, 3)
+  type          MovementType
+  referenceId   String       // ID of Receiving, Issuance, or WorkOrder
+  referenceType String       // "RECEIVING", "ISSUANCE", "RESTOCK"
+  createdBy     String
+  documentNumber String?
+  supplier      String?
+  remarks       String?      @db.Text
+  createdAt     DateTime     @default(now())
+}
