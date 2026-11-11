@@ -89,12 +89,9 @@ async function allocateDocumentNumber(tx: Prisma.TransactionClient, type: Docume
 export async function getDocumentNumberPreview(type: DocumentSeriesType, userId: string) {
   const permission = type === 'WORK_ORDER' ? 'work-orders:create' : type === 'MRS' ? 'mrs:create' : 'receiving:create';
   await requirePermission(userId, permission);
-  const series = await prisma.documentSeries.upsert({
-    where: { type },
-    update: {},
-    create: { type, ...defaultDocumentSeries[type] },
-  });
-  return formatDocumentNumber(series, series.nextNumber);
+  const series = await prisma.documentSeries.findUnique({ where: { type } });
+  const fallback = defaultDocumentSeries[type];
+  return formatDocumentNumber(series || fallback, series?.nextNumber ?? fallback.nextNumber);
 }
 
 export async function getDocumentSeriesSettings(userId: string) {
@@ -315,8 +312,13 @@ export async function getMRSPageReferenceData(userId: string) {
 export async function getMRSFormData(userId: string) {
   await requirePermission(userId, 'mrs:create');
   const [items, stocks, workOrders] = await Promise.all([
-    prisma.item.findMany({ orderBy: { name: 'asc' } }),
-    prisma.warehouseStock.findMany(),
+    prisma.item.findMany({
+      select: { id: true, code: true, name: true, description: true, category: true, unit: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.warehouseStock.findMany({
+      select: { id: true, itemId: true, warehouse: true, quantity: true, minStockLevel: true },
+    }),
     prisma.workOrder.findMany({
       orderBy: { createdAt: 'desc' },
       select: {
@@ -361,30 +363,110 @@ export async function getMRSFormData(userId: string) {
   };
 }
 
-export async function createMRS(input: { workOrderId?: string; purposeCategory: string; department: string; dateRequested: string; dateNeeded: string; requestedBy: string; preparedBy: string; createdById: string; items: Array<{ itemId?: string; customItemName?: string; description?: string; unit?: string; quantityRequested: number; purpose?: string; notInInventory?: boolean }> }) {
-  await requirePermission(input.createdById, 'mrs:create');
-  return prisma.$transaction(async tx => {
-    if (input.workOrderId) {
-      const workOrder = await tx.workOrder.findUniqueOrThrow({ where: { id: input.workOrderId }, include: { items: true, mrsList: { where: { status: { not: 'REJECTED' } }, include: { items: true } } } });
-      if (workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED') throw new Error('A completed or cancelled Job Order cannot receive a new MRS.');
-      const requestedByItem = new Map<string, number>();
-      for (const request of input.items.filter(item => item.itemId)) {
-        requestedByItem.set(request.itemId!, (requestedByItem.get(request.itemId!) || 0) + request.quantityRequested);
+export async function createMRS(input: { workOrderId?: string; workOrderReference?: string; purposeCategory: string; department: string; dateRequested: string; dateNeeded: string; requestedBy: string; preparedBy: string; createdById: string; items: Array<{ itemId?: string; customItemName?: string; description?: string; unit?: string; quantityRequested: number; purpose?: string; notInInventory?: boolean }> }) {
+  try {
+    await requirePermission(input.createdById, 'mrs:create');
+    return await prisma.$transaction(async tx => {
+      const workOrderReference = input.workOrderReference?.trim();
+      const hasWorkOrderReference = input.workOrderReference !== undefined;
+      const workOrder = hasWorkOrderReference
+        ? workOrderReference
+          ? await tx.workOrder.findUnique({
+            where: { woNumber: workOrderReference },
+            include: { items: true, mrsList: { where: { status: { not: 'REJECTED' } }, include: { items: true } } },
+          })
+          : null
+        : input.workOrderId
+          ? await tx.workOrder.findUnique({
+            where: { id: input.workOrderId },
+            include: { items: true, mrsList: { where: { status: { not: 'REJECTED' } }, include: { items: true } } },
+          })
+          : null;
+
+      if ((workOrderReference || (!hasWorkOrderReference && input.workOrderId)) && !workOrder) {
+        return { ok: false as const, error: workOrderReference
+          ? `Job Order "${workOrderReference}" was not found. Select a valid Job Order or clear the reference.`
+          : 'The linked Job Order was not found. Select a valid Job Order or clear the reference.' };
       }
-      for (const [itemId, requestQuantity] of requestedByItem) {
-        const required = workOrder.items.filter(item => item.itemId === itemId).reduce((total, item) => total + Number(item.quantityNeeded), 0);
-        if (required === 0) throw new Error('Every inventory item in a linked MRS must belong to the Job Order.');
-        const alreadyRequested = workOrder.mrsList.flatMap(mrs => mrs.items)
-          .filter(item => item.itemId === itemId)
-          .reduce((total, item) => total + Number(item.quantityRequested), 0);
-        if (alreadyRequested + requestQuantity > required) throw new Error('The requested quantity exceeds the remaining Job Order material requirement.');
+      if (workOrder && (workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED')) {
+        return { ok: false as const, error: 'A completed or cancelled Job Order cannot receive a new MRS.' };
       }
+
+      if (workOrder) {
+        const requestedByItem = new Map<string, number>();
+        for (const request of input.items.filter(item => item.itemId)) {
+          requestedByItem.set(request.itemId!, (requestedByItem.get(request.itemId!) || 0) + request.quantityRequested);
+        }
+        for (const [itemId, requestQuantity] of requestedByItem) {
+          const required = workOrder.items.filter(item => item.itemId === itemId).reduce((total, item) => total + Number(item.quantityNeeded), 0);
+          if (required === 0) {
+            return { ok: false as const, error: 'This Job Order has no matching material requirement. Add the item to the Job Order first, or clear the Job Order reference.' };
+          }
+          const alreadyRequested = workOrder.mrsList.flatMap(mrs => mrs.items)
+            .filter(item => item.itemId === itemId)
+            .reduce((total, item) => total + Number(item.quantityRequested), 0);
+          if (alreadyRequested + requestQuantity > required) {
+            return { ok: false as const, error: 'The requested quantity exceeds the remaining Job Order material requirement.' };
+          }
+        }
+      }
+
+      const mrsNumber = await allocateDocumentNumber(tx, 'MRS');
+      const created = await tx.mRS.create({
+        data: {
+          mrsNumber,
+          workOrderId: workOrder?.id || null,
+          purposeCategory: input.purposeCategory,
+          department: input.department,
+          dateRequested: new Date(input.dateRequested),
+          dateNeeded: new Date(input.dateNeeded),
+          requestedBy: input.requestedBy,
+          preparedBy: input.preparedBy,
+          createdById: input.createdById,
+          items: {
+            create: input.items.map(item => ({
+              itemId: item.itemId || null,
+              customItemName: item.customItemName,
+              description: item.description,
+              unit: item.unit,
+              quantityRequested: item.quantityRequested,
+              purpose: item.purpose,
+              notInInventory: item.notInInventory || false,
+              purchaseRequestStatus: item.notInInventory ? 'PENDING' : null,
+            })),
+          },
+        },
+        include: { items: true },
+      });
+      const purchaseItems = created.items.filter(value => value.notInInventory);
+      if (purchaseItems.length > 0) {
+        const createdAt = Date.now();
+        await tx.purchaseRequisition.createMany({
+          data: purchaseItems.map((item, index) => ({
+            prNumber: `PR-${createdAt}-${index}-${item.id.slice(-4)}`,
+            mrsItemId: item.id,
+            requestedBy: input.requestedBy,
+            department: input.department,
+            remarks: item.purpose,
+          })),
+        });
+      }
+      return { ok: true as const, mrs: mrsDto(created) };
+    });
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('[createMRS] Failed to create a material requisition:', error);
     }
-    const mrsNumber = await allocateDocumentNumber(tx, 'MRS');
-    const created = await tx.mRS.create({ data: { mrsNumber, workOrderId: input.workOrderId || null, purposeCategory: input.purposeCategory, department: input.department, dateRequested: new Date(input.dateRequested), dateNeeded: new Date(input.dateNeeded), requestedBy: input.requestedBy, preparedBy: input.preparedBy, createdById: input.createdById, items: { create: input.items.map(item => ({ itemId: item.itemId || null, customItemName: item.customItemName, description: item.description, unit: item.unit, quantityRequested: item.quantityRequested, purpose: item.purpose, notInInventory: item.notInInventory || false, purchaseRequestStatus: item.notInInventory ? 'PENDING' : null })) } }, include: { items: true } });
-    for (const item of created.items.filter(value => value.notInInventory)) await tx.purchaseRequisition.create({ data: { prNumber: `PR-${Date.now()}-${item.id.slice(-4)}`, mrsItemId: item.id, requestedBy: input.requestedBy, department: input.department, remarks: item.purpose } });
-    return mrsDto(created);
-  });
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      return { ok: false as const, error: 'The database could not save this requisition. Check for duplicate or invalid linked records and try again.' };
+    }
+    return {
+      ok: false as const,
+      error: process.env.NODE_ENV !== 'production' && error instanceof Error
+        ? error.message
+        : 'An unexpected error occurred while saving this requisition.',
+    };
+  }
 }
 
 export async function approveMRS(mrsId: string, userId: string) {
@@ -883,7 +965,17 @@ export async function getWorkOrderListPage(input: ListPageInput, userId: string)
   const [values, total] = await Promise.all([
     prisma.workOrder.findMany({
       where,
-      include: { items: { include: { item: true } }, mrsList: { include: { items: true }, orderBy: { createdAt: 'desc' } } },
+      include: {
+        items: {
+          include: { item: { select: { id: true, code: true, name: true, unit: true } } },
+        },
+        mrsList: {
+          include: {
+            items: { select: { id: true, itemId: true, quantityRequested: true, quantityIssued: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
       orderBy: { createdAt: 'desc' },
       skip: (page - 1) * listPageSize,
       take: listPageSize,

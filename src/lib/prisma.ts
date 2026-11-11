@@ -10,9 +10,6 @@ if (!connectionString) throw new Error('DATABASE_URL must be configured before c
 
 const adapter = new PrismaNeon({ connectionString });
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter });
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = prisma;
-}
+globalForPrisma.prisma = prisma;
 
 export default prisma;
