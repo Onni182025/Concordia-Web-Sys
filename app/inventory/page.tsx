@@ -126,7 +126,22 @@ export default function InventoryPage() {
 
   const deleteItem = async (item: Item) => {
     if (!isAdmin || !window.confirm(`Delete ${item.name} and its warehouse stock?`)) return;
-    try { if (!user) throw new Error('You must be signed in.'); await deleteInventoryItem(item.id, user.id); await refresh(); } catch (error) { toast({ title: 'Unable to delete item', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' }); return; }
+    try {
+      if (!user) throw new Error('You must be signed in.');
+      const result = await deleteInventoryItem(item.id, user.id);
+      if (!result.ok) {
+        toast({ title: 'Unable to delete item', description: result.error, variant: 'destructive' });
+        return;
+      }
+      await refresh();
+    } catch {
+      toast({
+        title: 'Unable to delete item',
+        description: 'The item could not be deleted. Refresh the inventory and try again.',
+        variant: 'destructive',
+      });
+      return;
+    }
     toast({ title: 'Item deleted', description: `${item.name} was removed from inventory.` });
   };
   const totalIssuance = (itemId: string) => issuanceTotals[itemId] || 0;

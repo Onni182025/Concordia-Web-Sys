@@ -4,7 +4,7 @@ import { prisma } from '@/src/lib/prisma';
 import { can, canManageUser, warehouseForRole } from '@/lib/rbac';
 import { requireAuthenticatedUser, requirePermission, requireWarehousePermission } from '@/lib/rbac-server';
 import bcrypt from 'bcryptjs';
-import type { DocumentSeriesType, Prisma } from '@prisma/client';
+import { Prisma, type DocumentSeriesType } from '@prisma/client';
 import type { Item, MRS, MRSItem, Receiving, StockMovement, User, Warehouse, WarehouseStock, WorkOrder, WorkOrderItem } from '@/lib/erp-types';
 import { workOrderFormSchema } from '@/lib/schemas/work-order-schema';
 
@@ -257,7 +257,51 @@ export async function restockInventory(input: { itemId: string; warehouse: Wareh
   });
 }
 
-export async function deleteInventoryItem(itemId: string, userId: string) { await requirePermission(userId, 'inventory:manage'); await prisma.item.delete({ where: { id: itemId } }); }
+export async function deleteInventoryItem(itemId: string, userId: string) {
+  const actor = await requirePermission(userId, 'inventory:manage');
+  if (warehouseForRole(actor.role)) {
+    return { ok: false as const, error: 'Only users with access to both warehouses can delete an inventory item.' };
+  }
+
+  try {
+    return await prisma.$transaction(async tx => {
+      const item = await tx.item.findUnique({
+        where: { id: itemId },
+        select: {
+          _count: {
+            select: {
+              workOrderItems: true,
+              mrsItems: true,
+              receivingItems: true,
+              movements: true,
+              transferItems: true,
+            },
+          },
+        },
+      });
+      if (!item) return { ok: false as const, error: 'This inventory item no longer exists.' };
+
+      const linkedRecords = Object.values(item._count).reduce((total, count) => total + count, 0);
+      if (linkedRecords > 0) {
+        return {
+          ok: false as const,
+          error: 'This item is linked to existing inventory or request records and cannot be deleted without removing its history.',
+        };
+      }
+
+      await tx.item.delete({ where: { id: itemId } });
+      return { ok: true as const };
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+      return {
+        ok: false as const,
+        error: 'This item was linked to another record while deletion was in progress. Refresh the list and try again.',
+      };
+    }
+    throw error;
+  }
+}
 
 export async function getMRSPageReferenceData(userId: string) {
   await requirePermission(userId, 'mrs:view');
