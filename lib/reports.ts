@@ -31,7 +31,7 @@ export type ReportColumn = {
 export const reportDefinitions: Record<ReportKey, { title: string; description: string; columns: ReportColumn[] }> = {
   'stock-inventory': {
     title: 'Stock Inventory Report',
-    description: 'Current on-hand inventory by item and warehouse.',
+    description: 'Current on-hand inventory, with the date this report was generated.',
     columns: [
       { key: 'itemCode', label: 'Item Code' },
       { key: 'name', label: 'Name' },
@@ -39,7 +39,8 @@ export const reportDefinitions: Record<ReportKey, { title: string; description: 
       { key: 'quantity', label: 'Quantity' },
       { key: 'unit', label: 'Unit' },
       { key: 'reorderLevel', label: 'Reorder Level' },
-      { key: 'location', label: 'Location' },
+      { key: 'warehouse', label: 'Warehouse' },
+      { key: 'location', label: 'Sub-location' },
     ],
   },
   'low-stock': {
@@ -85,10 +86,10 @@ export const reportDefinitions: Record<ReportKey, { title: string; description: 
     ],
   },
   mrs: {
-    title: 'MRS Report',
-    description: 'Material requisition status and linked job-order details.',
+    title: 'Stock Requisition Report',
+    description: 'Stock requisition status and linked job-order details.',
     columns: [
-      { key: 'mrsNumber', label: 'MRS Number' },
+      { key: 'mrsNumber', label: 'SRS Number' },
       { key: 'workOrder', label: 'Job Order' },
       { key: 'date', label: 'Date Requested' },
       { key: 'department', label: 'Department' },
@@ -99,10 +100,10 @@ export const reportDefinitions: Record<ReportKey, { title: string; description: 
   },
   issuance: {
     title: 'Issuance Report',
-    description: 'Items issued from approved Material Requisition Slips.',
+    description: 'Items issued from approved Stock Requisition Slips.',
     columns: [
       { key: 'date', label: 'Date Issued' },
-      { key: 'mrsNumber', label: 'MRS Number' },
+      { key: 'mrsNumber', label: 'SRS Number' },
       { key: 'itemCode', label: 'Item Code' },
       { key: 'item', label: 'Item' },
       { key: 'warehouse', label: 'Warehouse' },
@@ -145,7 +146,7 @@ export const reportNavigation: Array<{ key: ReportKey; label: string }> = [
   { key: 'low-stock', label: 'Low Stock Report' },
   { key: 'stock-movements', label: 'Stock Movement Report' },
   { key: 'work-orders', label: 'Job Order Report' },
-  { key: 'mrs', label: 'MRS Report' },
+  { key: 'mrs', label: 'Stock Requisition Report' },
   { key: 'issuance', label: 'Issuance Report' },
   { key: 'receiving', label: 'Receiving Report Log' },
   { key: 'stock-transfers', label: 'Stock Transfer Report' },

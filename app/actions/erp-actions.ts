@@ -1,22 +1,24 @@
 'use server';
 
 import { prisma } from '@/src/lib/prisma';
-import { can, canManageUser, warehouseForRole } from '@/lib/rbac';
+import { can, canDisapproveRequest, canManageUser, stockSubLocationsForRole, warehouseForRole } from '@/lib/rbac';
 import { requireAuthenticatedUser, requirePermission, requireWarehousePermission } from '@/lib/rbac-server';
 import bcrypt from 'bcryptjs';
 import { Prisma, type DocumentSeriesType } from '@prisma/client';
+import { z } from 'zod';
 import type { Item, MRS, MRSItem, Receiving, StockMovement, User, Warehouse, WarehouseStock, WorkOrder, WorkOrderItem } from '@/lib/erp-types';
+import { mrsFormSchema, type MRSFormValues } from '@/lib/schemas/mrs-schema';
 import { workOrderFormSchema } from '@/lib/schemas/work-order-schema';
 
 const dateOnly = (value: Date) => value.toISOString().split('T')[0];
 const numberValue = (value: unknown) => Number(value);
 const userDto = (value: any): User => ({ ...value, createdAt: dateOnly(value.createdAt), password: undefined });
 const itemDto = (value: any): Item => ({ id: value.id, code: value.code, name: value.name, description: value.description || '', category: value.category, unit: value.unit });
-const stockDto = (value: any): WarehouseStock => ({ id: value.id, itemId: value.itemId, warehouse: value.warehouse, quantity: numberValue(value.quantity), minStockLevel: numberValue(value.minStockLevel) });
+const stockDto = (value: any): WarehouseStock => ({ id: value.id, itemId: value.itemId, warehouse: value.warehouse, subLocation: value.subLocation || 'Unspecified', quantity: numberValue(value.quantity), minStockLevel: numberValue(value.minStockLevel) });
 const workOrderItemDto = (value: any): WorkOrderItem => ({ id: value.id, workOrderId: value.workOrderId, itemId: value.itemId, quantityNeeded: numberValue(value.quantityNeeded), quantityIssued: numberValue(value.quantityIssued), item: value.item ? { id: value.item.id, code: value.item.code, name: value.item.name, unit: value.item.unit } : undefined });
 const mrsItemDto = (value: any): MRSItem => ({ id: value.id, mrsId: value.mrsId, itemId: value.itemId || undefined, customItemName: value.customItemName || undefined, description: value.description || undefined, unit: value.unit || undefined, quantityRequested: numberValue(value.quantityRequested), quantityApproved: numberValue(value.quantityApproved), quantityIssued: numberValue(value.quantityIssued), purpose: value.purpose || undefined, notInInventory: value.notInInventory, purchaseRequestStatus: value.purchaseRequestStatus || undefined });
-const workOrderDto = (value: any): WorkOrder => ({ id: value.id, woNumber: value.woNumber, type: value.type, dateRequested: dateOnly(value.dateRequested), dateNeeded: dateOnly(value.dateNeeded), department: value.department, machineEquipment: value.machineEquipment, areaBuilding: value.areaBuilding, specification: value.specification, description: value.description, priority: value.priority, requestedBy: value.requestedBy, status: value.status, createdById: value.createdById, createdAt: dateOnly(value.createdAt), cancelledBy: value.cancelledBy || undefined, cancelledAt: value.cancelledAt?.toISOString(), cancelReason: value.cancelReason || undefined, items: value.items?.map(workOrderItemDto) });
-const mrsDto = (value: any): MRS => ({ id: value.id, mrsNumber: value.mrsNumber, workOrderId: value.workOrderId || undefined, purposeCategory: value.purposeCategory, department: value.department, dateRequested: dateOnly(value.dateRequested), dateNeeded: dateOnly(value.dateNeeded), requestedBy: value.requestedBy, preparedBy: value.preparedBy, status: value.status, createdById: value.createdById, createdAt: dateOnly(value.createdAt), cancelledBy: value.cancelledBy || undefined, cancelledAt: value.cancelledAt?.toISOString(), cancelReason: value.cancelReason || undefined, items: value.items?.map(mrsItemDto) });
+const workOrderDto = (value: any): WorkOrder => ({ id: value.id, woNumber: value.woNumber, type: value.type, dateRequested: dateOnly(value.dateRequested), dateNeeded: dateOnly(value.dateNeeded), department: value.department, machineEquipment: value.machineEquipment, areaBuilding: value.areaBuilding, specification: value.specification, description: value.description, priority: value.priority, requestedBy: value.requestedBy, status: value.status, createdById: value.createdById, createdAt: dateOnly(value.createdAt), cancelledBy: value.cancelledBy || undefined, cancelledAt: value.cancelledAt?.toISOString(), cancelReason: value.cancelReason || undefined, editedBy: value.editedBy || undefined, editedAt: value.editedAt?.toISOString(), disapprovedBy: value.disapprovedBy || undefined, disapprovedAt: value.disapprovedAt?.toISOString(), disapproveReason: value.disapproveReason || undefined, items: value.items?.map(workOrderItemDto), ...(value.mrsList ? { mrsList: value.mrsList.map((mrs: any) => ({ id: mrs.id, mrsNumber: mrs.mrsNumber, status: mrs.status, dateRequested: dateOnly(mrs.dateRequested), createdAt: dateOnly(mrs.createdAt), itemCount: mrs.items.length, disapprovedBy: mrs.disapprovedBy || undefined, items: mrs.items.map((item: any) => ({ id: item.id, itemId: item.itemId || undefined, quantityRequested: numberValue(item.quantityRequested), quantityIssued: numberValue(item.quantityIssued) })) })) } : {}) });
+const mrsDto = (value: any): MRS => ({ id: value.id, mrsNumber: value.mrsNumber, workOrderId: value.workOrderId || undefined, purposeCategory: value.purposeCategory, department: value.department, dateRequested: dateOnly(value.dateRequested), dateNeeded: dateOnly(value.dateNeeded), requestedBy: value.requestedBy, preparedBy: value.preparedBy, status: value.status, createdById: value.createdById, createdAt: dateOnly(value.createdAt), cancelledBy: value.cancelledBy || undefined, cancelledAt: value.cancelledAt?.toISOString(), cancelReason: value.cancelReason || undefined, editedBy: value.editedBy || undefined, editedAt: value.editedAt?.toISOString(), disapprovedBy: value.disapprovedBy || undefined, disapprovedAt: value.disapprovedAt?.toISOString(), disapproveReason: value.disapproveReason || undefined, items: value.items?.map(mrsItemDto) });
 
 async function writeAuditLog(
   tx: Prisma.TransactionClient,
@@ -211,37 +213,135 @@ export async function getInventoryData(userId: string) {
   return { items: items.map(itemDto), stocks: stocks.map(stockDto), issuanceTotals: Object.fromEntries(issuance.map(value => [value.itemId, Math.abs(numberValue(value._sum.quantity))])) };
 }
 
-export async function saveInventoryItem(input: { id?: string; name: string; code: string; category: string; description?: string; unit: string; quantity: number; reorderLevel: number; location: Warehouse; createdBy?: string; userId: string }) {
+const inventoryStockRowSchema = z.object({
+  name: z.string().trim().min(1, 'Item name is required'),
+  code: z.string().trim().min(1, 'Item code is required'),
+  category: z.string().trim().min(1, 'Category is required'),
+  quantity: z.number().finite().min(0, 'Quantity cannot be negative'),
+  unit: z.string().trim().min(1, 'Unit is required'),
+  reorderLevel: z.number().finite().min(0, 'Reorder level cannot be negative'),
+  location: z.enum(['FARM', 'ENGINEERING']),
+  subLocation: z.string().trim().min(1, 'Select a stock sub-location'),
+});
+type BulkStockRow = z.infer<typeof inventoryStockRowSchema>;
+const disapprovalReasonSchema = z.string().trim().min(1, 'A disapproval reason is required.').max(2000, 'Disapproval reason must be 2,000 characters or fewer.');
+
+export async function saveInventoryItem(input: { id?: string; name: string; code: string; category: string; description?: string; unit: string; quantity: number; reorderLevel: number; location: Warehouse; subLocation: string; createdBy?: string; userId: string }) {
   const actor = await requireWarehousePermission(input.userId, 'inventory:manage', input.location);
+  const value = inventoryStockRowSchema.parse(input);
+  if (!stockSubLocationsForRole(actor.role, value.location).includes(value.subLocation)) {
+    throw new Error('Select a stock sub-location authorized for your role and warehouse.');
+  }
   return prisma.$transaction(async tx => {
     const item = input.id
-      ? await tx.item.update({ where: { id: input.id }, data: { name: input.name, code: input.code, category: input.category, description: input.description, unit: input.unit } })
-      : await tx.item.create({ data: { name: input.name, code: input.code, category: input.category, description: input.description, unit: input.unit } });
-    const existingStock = await tx.warehouseStock.findUnique({ where: { itemId_warehouse: { itemId: item.id, warehouse: input.location } } });
+      ? await tx.item.update({ where: { id: input.id }, data: { name: value.name, code: value.code, category: value.category, description: input.description, unit: value.unit } })
+      : await tx.item.create({ data: { name: value.name, code: value.code, category: value.category, description: input.description, unit: value.unit } });
+    const existingStock = await tx.warehouseStock.findUnique({ where: { itemId_warehouse: { itemId: item.id, warehouse: value.location } } });
     const previousQuantity = existingStock ? Number(existingStock.quantity) : 0;
     const stock = await tx.warehouseStock.upsert({
-      where: { itemId_warehouse: { itemId: item.id, warehouse: input.location } },
-      update: { quantity: input.quantity, minStockLevel: input.reorderLevel },
-      create: { itemId: item.id, warehouse: input.location, quantity: input.quantity, minStockLevel: input.reorderLevel },
+      where: { itemId_warehouse: { itemId: item.id, warehouse: value.location } },
+      update: { quantity: value.quantity, minStockLevel: value.reorderLevel, subLocation: value.subLocation },
+      create: { itemId: item.id, warehouse: value.location, subLocation: value.subLocation, quantity: value.quantity, minStockLevel: value.reorderLevel },
     });
-    const quantityChange = input.quantity - previousQuantity;
+    const quantityChange = value.quantity - previousQuantity;
     if (quantityChange !== 0) {
       await tx.stockMovement.create({
         data: {
           itemId: item.id,
-          warehouse: input.location,
+          warehouse: value.location,
           quantity: quantityChange,
           quantityAfter: stock.quantity,
           type: quantityChange > 0 ? 'RESTOCK' : 'ADJUSTMENT',
           referenceId: item.code,
           referenceType: quantityChange > 0 ? 'RESTOCK' : 'ADJUSTMENT',
           createdBy: actor.name,
-          remarks: 'Inventory quantity initialized or manually adjusted.',
+          remarks: `Inventory quantity initialized or manually adjusted at ${value.subLocation}.`,
         },
       });
     }
     return itemDto(item);
   });
+}
+
+export async function bulkCreateInventoryItems(input: { rows: unknown[]; userId: string }) {
+  const actor = await requirePermission(input.userId, 'inventory:manage');
+  if (!Array.isArray(input.rows) || input.rows.length === 0) throw new Error('Add at least one stock item row.');
+  if (input.rows.length > 100) throw new Error('Bulk entry is limited to 100 rows per submission.');
+
+  const errors: Array<{ row: number; message: string }> = [];
+  const validRows: Array<{ row: number; value: BulkStockRow }> = [];
+  const seenCodes = new Set<string>();
+  input.rows.forEach((rawValue, index) => {
+    const rowNumber = index + 1;
+    const parsed = inventoryStockRowSchema.safeParse(rawValue);
+    if (!parsed.success) {
+      errors.push({ row: rowNumber, message: parsed.error.issues[0]?.message || 'Check this row.' });
+      return;
+    }
+    const value = parsed.data;
+    const restrictedWarehouse = warehouseForRole(actor.role);
+    if (restrictedWarehouse && value.location !== restrictedWarehouse) {
+      errors.push({ row: rowNumber, message: 'Warehouse is outside your role assignment.' });
+      return;
+    }
+    if (!stockSubLocationsForRole(actor.role, value.location).includes(value.subLocation)) {
+      errors.push({ row: rowNumber, message: 'Sub-location is not authorized for this role and warehouse.' });
+      return;
+    }
+    const normalizedCode = value.code.toLocaleLowerCase();
+    if (seenCodes.has(normalizedCode)) {
+      errors.push({ row: rowNumber, message: `Item code "${value.code}" is duplicated in this submission.` });
+      return;
+    }
+    seenCodes.add(normalizedCode);
+    validRows.push({ row: rowNumber, value });
+  });
+
+  const existing = await prisma.item.findMany({
+    where: { code: { in: validRows.map(row => row.value.code) } },
+    select: { code: true },
+  });
+  const existingCodes = new Set(existing.map(item => item.code.toLocaleLowerCase()));
+  const rowsToCreate = validRows.filter(row => {
+    if (!existingCodes.has(row.value.code.toLocaleLowerCase())) return true;
+    errors.push({ row: row.row, message: `Item code "${row.value.code}" already exists.` });
+    return false;
+  });
+  const createdItems = await prisma.$transaction(async tx => {
+    const created: Item[] = [];
+    for (const { value } of rowsToCreate) {
+      const item = await tx.item.create({
+        data: { name: value.name, code: value.code, category: value.category, unit: value.unit },
+      });
+      const stock = await tx.warehouseStock.create({
+        data: {
+          itemId: item.id,
+          warehouse: value.location,
+          subLocation: value.subLocation,
+          quantity: value.quantity,
+          minStockLevel: value.reorderLevel,
+        },
+      });
+      if (value.quantity > 0) {
+        await tx.stockMovement.create({
+          data: {
+            itemId: item.id,
+            warehouse: value.location,
+            quantity: value.quantity,
+            quantityAfter: stock.quantity,
+            type: 'RESTOCK',
+            referenceId: item.code,
+            referenceType: 'RESTOCK',
+            createdBy: actor.name,
+            remarks: `Initial bulk stock entry at ${value.subLocation}.`,
+          },
+        });
+      }
+      created.push(itemDto(item));
+    }
+    return created;
+  });
+  return { createdCount: createdItems.length, errors, items: createdItems };
 }
 
 export async function restockInventory(input: { itemId: string; warehouse: Warehouse; quantity: number; documentNumber: string; supplier: string; remarks?: string; createdBy: string; userId: string }) {
@@ -469,6 +569,130 @@ export async function createMRS(input: { workOrderId?: string; workOrderReferenc
   }
 }
 
+export async function getMRSForEdit(mrsId: string, userId: string) {
+  await requirePermission(userId, 'mrs:create');
+  const mrs = await prisma.mRS.findUnique({
+    where: { id: mrsId },
+    include: { items: true, workOrder: { select: { woNumber: true } } },
+  });
+  if (!mrs) throw new Error('This Stock Requisition Slip no longer exists.');
+  const canRework = mrs.status === 'REJECTED' && Boolean(mrs.disapprovedBy) && !mrs.cancelledBy;
+  if (mrs.status !== 'PENDING' && !canRework) throw new Error('Only pending or disapproved Stock Requisition Slips can be edited.');
+  return { ...mrsDto(mrs), workOrderReference: mrs.workOrder?.woNumber || '' };
+}
+
+export async function updateMRS(input: MRSFormValues & { id: string; userId: string }) {
+  const actor = await requirePermission(input.userId, 'mrs:create');
+  const values = mrsFormSchema.parse(input);
+  return prisma.$transaction(async tx => {
+    const current = await tx.mRS.findUnique({
+      where: { id: input.id },
+      include: { items: true },
+    });
+    if (!current) throw new Error('This Stock Requisition Slip no longer exists.');
+    const canRework = current.status === 'REJECTED' && Boolean(current.disapprovedBy) && !current.cancelledBy;
+    if (current.status !== 'PENDING' && !canRework) throw new Error('Only pending or disapproved Stock Requisition Slips can be edited.');
+
+    const currentItemIds = current.items.map(item => item.id);
+    if (currentItemIds.length > 0) {
+      const activePurchaseRequest = await tx.purchaseRequisition.findFirst({
+        where: { mrsItemId: { in: currentItemIds }, status: { not: 'PENDING' } },
+        select: { id: true },
+      });
+      if (activePurchaseRequest) {
+        throw new Error('This requisition has a purchase request already approved or ordered and cannot be edited.');
+      }
+    }
+
+    const reference = values.workOrderReference?.trim();
+    const workOrder = reference
+      ? await tx.workOrder.findUnique({
+        where: { woNumber: reference },
+        include: {
+          items: true,
+          mrsList: {
+            where: { id: { not: current.id }, status: { not: 'REJECTED' } },
+            include: { items: true },
+          },
+        },
+      })
+      : null;
+    if (reference && !workOrder) throw new Error(`Job Order "${reference}" was not found. Select a valid Job Order or clear the reference.`);
+    if (workOrder && ['COMPLETED', 'REJECTED'].includes(workOrder.status)) {
+      throw new Error('A completed or cancelled Job Order cannot receive a Stock Requisition Slip.');
+    }
+
+    if (workOrder) {
+      const requests = new Map<string, number>();
+      for (const item of values.items.filter(line => line.itemId)) {
+        const itemId = item.itemId!;
+        requests.set(itemId, (requests.get(itemId) || 0) + item.quantityRequested);
+      }
+      for (const [itemId, quantity] of requests) {
+        const required = workOrder.items
+          .filter(item => item.itemId === itemId)
+          .reduce((total, item) => total + Number(item.quantityNeeded), 0);
+        const previouslyRequested = workOrder.mrsList.flatMap(mrs => mrs.items)
+          .filter(item => item.itemId === itemId)
+          .reduce((total, item) => total + Number(item.quantityRequested), 0);
+        if (required === 0 || previouslyRequested + quantity > required) {
+          throw new Error('The requested items or quantities exceed the remaining Job Order material requirements.');
+        }
+      }
+    }
+
+    if (currentItemIds.length > 0) {
+      await tx.purchaseRequisition.deleteMany({ where: { mrsItemId: { in: currentItemIds }, status: 'PENDING' } });
+      await tx.mRSItem.deleteMany({ where: { id: { in: currentItemIds } } });
+    }
+    const updated = await tx.mRS.update({
+      where: { id: current.id },
+      data: {
+        workOrderId: workOrder?.id || null,
+        purposeCategory: values.purposeCategory,
+        department: values.department.trim(),
+        dateRequested: new Date(values.dateRequested),
+        dateNeeded: new Date(values.dateNeeded),
+        requestedBy: values.requestedBy.trim(),
+        preparedBy: values.preparedBy.trim(),
+        status: 'PENDING',
+        editedBy: actor.name,
+        editedAt: new Date(),
+        disapprovedBy: null,
+        disapprovedAt: null,
+        disapproveReason: null,
+        items: {
+          create: values.items.map(item => ({
+            itemId: item.itemId || null,
+            customItemName: item.customItemName?.trim() || null,
+            description: item.description?.trim() || null,
+            unit: item.unit.trim(),
+            quantityRequested: item.quantityRequested,
+            purpose: item.purpose?.trim() || null,
+            notInInventory: item.notInInventory,
+            purchaseRequestStatus: item.notInInventory ? 'PENDING' : null,
+          })),
+        },
+      },
+      include: { items: true },
+    });
+    const purchaseItems = updated.items.filter(item => item.notInInventory);
+    if (purchaseItems.length > 0) {
+      await tx.purchaseRequisition.createMany({
+        data: purchaseItems.map((item, index) => ({
+          prNumber: `PR-${Date.now()}-${index}-${item.id.slice(-4)}`,
+          mrsItemId: item.id,
+          requestedBy: values.requestedBy.trim(),
+          department: values.department.trim(),
+          remarks: item.purpose,
+        })),
+      });
+    }
+    await writeAuditLog(tx, actor, 'SRS_UPDATED', 'MRS', current.id, { number: current.mrsNumber });
+    return mrsDto(updated);
+  });
+}
+
 export async function approveMRS(mrsId: string, userId: string) {
   await requirePermission(userId, 'mrs:approve');
   const updated = await prisma.$transaction(async tx => {
@@ -481,6 +705,25 @@ export async function approveMRS(mrsId: string, userId: string) {
     return tx.mRS.findUniqueOrThrow({ where: { id: mrsId }, include: { items: true } });
   });
   return mrsDto(updated);
+}
+
+export async function disapproveMRS(mrsId: string, reason: string, userId: string) {
+  const actor = await requirePermission(userId, 'mrs:approve');
+  if (!canDisapproveRequest(actor.role, 'mrs:approve', actor.permissions)) {
+    throw new Error('You are not authorized to disapprove Stock Requisition Slips.');
+  }
+  const trimmedReason = disapprovalReasonSchema.parse(reason);
+  return prisma.$transaction(async tx => {
+    const current = await tx.mRS.findUniqueOrThrow({ where: { id: mrsId } });
+    if (current.status !== 'PENDING') throw new Error('Only pending Stock Requisition Slips can be disapproved.');
+    const updated = await tx.mRS.update({
+      where: { id: mrsId },
+      data: { status: 'REJECTED', disapprovedBy: actor.name, disapprovedAt: new Date(), disapproveReason: trimmedReason },
+      include: { items: true },
+    });
+    await writeAuditLog(tx, actor, 'SRS_DISAPPROVED', 'MRS', mrsId, { reason: trimmedReason });
+    return mrsDto(updated);
+  });
 }
 
 export async function cancelMRS(mrsId: string, reason: string, userId: string) {
@@ -619,6 +862,94 @@ export async function createWorkOrder(input: { type: 'MRRF' | 'EPRF'; dateNeeded
   });
 }
 
+export async function updateWorkOrder(input: { id: string; userId: string; type: 'MRRF' | 'EPRF'; dateNeeded: string; department: string; machineEquipment: string; areaBuilding: string; specification: string; description: string; priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; requestedBy: string; items: Array<{ itemId: string; quantityNeeded: number }> }) {
+  const actor = await requirePermission(input.userId, 'work-orders:create');
+  workOrderFormSchema.parse(input);
+  return prisma.$transaction(async tx => {
+    const current = await tx.workOrder.findUnique({
+      where: { id: input.id },
+      include: { items: true, mrsList: { where: { status: { not: 'REJECTED' } }, include: { items: true } } },
+    });
+    if (!current) throw new Error('This Job Order no longer exists.');
+    const canRework = current.status === 'REJECTED' && Boolean(current.disapprovedBy) && !current.cancelledBy;
+    if (current.status !== 'PENDING' && current.status !== 'IN_PROGRESS' && !canRework) {
+      throw new Error('Only pending, in-progress, or disapproved Job Orders can be edited. Approved, completed, and cancelled orders are locked.');
+    }
+
+    const requestedByItem = new Map<string, number>();
+    const issuedByItem = new Map<string, number>();
+    for (const mrsItem of current.mrsList.flatMap(mrs => mrs.items)) {
+      if (!mrsItem.itemId) continue;
+      requestedByItem.set(mrsItem.itemId, (requestedByItem.get(mrsItem.itemId) || 0) + Number(mrsItem.quantityRequested));
+      issuedByItem.set(mrsItem.itemId, (issuedByItem.get(mrsItem.itemId) || 0) + Number(mrsItem.quantityIssued));
+    }
+    const updatedItemIds = new Set(input.items.map(item => item.itemId));
+    for (const [itemId, requested] of requestedByItem) {
+      if (requested > 0 && !updatedItemIds.has(itemId)) {
+        throw new Error('A material with an existing requisition cannot be removed from the Job Order. Keep the line and adjust only after its requisition is resolved.');
+      }
+    }
+    for (const item of input.items) {
+      const minimum = Math.max(requestedByItem.get(item.itemId) || 0, issuedByItem.get(item.itemId) || 0);
+      if (item.quantityNeeded < minimum) {
+        throw new Error('A material quantity cannot be reduced below quantities already requisitioned or issued.');
+      }
+    }
+
+    const approvedMRSIds = current.mrsList.filter(mrs => mrs.status === 'APPROVED').map(mrs => mrs.id);
+    if (approvedMRSIds.length > 0) {
+      await tx.mRSItem.updateMany({
+        where: { mrsId: { in: approvedMRSIds } },
+        data: { quantityApproved: 0 },
+      });
+      await tx.mRS.updateMany({
+        where: { id: { in: approvedMRSIds }, status: 'APPROVED' },
+        data: { status: 'PENDING' },
+      });
+    }
+    await tx.workOrderItem.deleteMany({ where: { workOrderId: current.id } });
+    const updated = await tx.workOrder.update({
+      where: { id: current.id },
+      data: {
+        type: input.type,
+        dateNeeded: new Date(input.dateNeeded),
+        department: input.department.trim(),
+        machineEquipment: input.machineEquipment.trim(),
+        areaBuilding: input.areaBuilding.trim(),
+        specification: input.specification,
+        description: input.description,
+        priority: input.priority,
+        requestedBy: input.requestedBy.trim(),
+        status: 'PENDING',
+        editedBy: actor.name,
+        editedAt: new Date(),
+        disapprovedBy: null,
+        disapprovedAt: null,
+        disapproveReason: null,
+        cancelledBy: null,
+        cancelledAt: null,
+        cancelReason: null,
+        items: {
+          create: input.items.map(item => ({
+            itemId: item.itemId,
+            quantityNeeded: item.quantityNeeded,
+            quantityIssued: issuedByItem.get(item.itemId) || 0,
+          })),
+        },
+      },
+      include: {
+        items: { include: { item: { select: { id: true, code: true, name: true, unit: true } } } },
+        mrsList: {
+          include: { items: { select: { id: true, itemId: true, quantityRequested: true, quantityIssued: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+    await writeAuditLog(tx, actor, 'JOB_ORDER_UPDATED', 'WORK_ORDER', current.id, { number: current.woNumber });
+    return workOrderDto(updated);
+  });
+}
+
 export async function updateWorkOrderStatus(id: string, status: WorkOrder['status'], userId: string) {
   await requirePermission(userId, 'work-orders:approve');
   return prisma.$transaction(async tx => {
@@ -626,9 +957,13 @@ export async function updateWorkOrderStatus(id: string, status: WorkOrder['statu
       where: { id },
       include: { items: true, mrsList: { where: { status: { not: 'REJECTED' } }, include: { items: true } } },
     });
-    if (workOrder.status === 'REJECTED') throw new Error('A cancelled Job Order cannot be updated.');
+    if (workOrder.status === 'REJECTED') throw new Error(workOrder.disapprovedBy ? 'A disapproved Job Order must be reworked before it can proceed.' : 'A cancelled Job Order cannot be updated.');
     if (status === 'REJECTED') throw new Error('Use the cancellation action to cancel a Job Order.');
     if (workOrder.status === 'COMPLETED') throw new Error('A completed Job Order cannot be updated.');
+    if (status === 'APPROVED' && workOrder.status !== 'PENDING') throw new Error('Only pending Job Orders can be approved.');
+    if (status === 'IN_PROGRESS' && workOrder.status !== 'APPROVED') throw new Error('Only approved Job Orders can be started.');
+    if (status === 'COMPLETED' && workOrder.status !== 'IN_PROGRESS') throw new Error('Only in-progress Job Orders can be completed.');
+    if (status === 'PENDING') throw new Error('Use the edit action to return a Job Order to pending approval.');
     if (status === 'APPROVED' && workOrder.type === 'MRRF') {
       await requirePermission(userId, 'work-orders:mrrf:approve');
     }
@@ -641,7 +976,43 @@ export async function updateWorkOrderStatus(id: string, status: WorkOrder['statu
       });
       if (notFullyIssued) throw new Error('All required Job Order materials must be fully issued before work can start or be completed.');
     }
-    return workOrderDto(await tx.workOrder.update({ where: { id }, data: { status } }));
+    return workOrderDto(await tx.workOrder.update({
+      where: { id },
+      data: { status },
+      include: {
+        items: { include: { item: { select: { id: true, code: true, name: true, unit: true } } } },
+        mrsList: {
+          include: { items: { select: { id: true, itemId: true, quantityRequested: true, quantityIssued: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    }));
+  });
+}
+
+export async function disapproveWorkOrder(id: string, reason: string, userId: string) {
+  const actor = await requirePermission(userId, 'work-orders:approve');
+  if (!canDisapproveRequest(actor.role, 'work-orders:approve', actor.permissions)) {
+    throw new Error('You are not authorized to disapprove Job Orders.');
+  }
+  const trimmedReason = disapprovalReasonSchema.parse(reason);
+  return prisma.$transaction(async tx => {
+    const current = await tx.workOrder.findUniqueOrThrow({ where: { id } });
+    if (current.status !== 'PENDING') throw new Error('Only pending Job Orders can be disapproved.');
+    if (current.type === 'MRRF') await requirePermission(userId, 'work-orders:mrrf:approve');
+    const updated = await tx.workOrder.update({
+      where: { id },
+      data: { status: 'REJECTED', disapprovedBy: actor.name, disapprovedAt: new Date(), disapproveReason: trimmedReason },
+      include: {
+        items: { include: { item: { select: { id: true, code: true, name: true, unit: true } } } },
+        mrsList: {
+          include: { items: { select: { id: true, itemId: true, quantityRequested: true, quantityIssued: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+    await writeAuditLog(tx, actor, 'JOB_ORDER_DISAPPROVED', 'WORK_ORDER', id, { reason: trimmedReason });
+    return workOrderDto(updated);
   });
 }
 
@@ -991,6 +1362,7 @@ export async function getWorkOrderListPage(input: ListPageInput, userId: string)
       dateRequested: dateOnly(mrs.dateRequested),
       createdAt: dateOnly(mrs.createdAt),
       itemCount: mrs.items.length,
+      disapprovedBy: mrs.disapprovedBy || undefined,
       items: mrs.items.map(item => ({ id: item.id, itemId: item.itemId || undefined, quantityRequested: numberValue(item.quantityRequested), quantityIssued: numberValue(item.quantityIssued) })),
     })),
   }));

@@ -2,8 +2,8 @@ import { z } from 'zod';
 
 const nonPlaceholderText = (label: string) => z.string().trim().min(1, `${label} is required`).refine(value => {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  return !/^(?:test(?:ing)?|dummy|placeholder|sample|tbd|n a|na|none|unknown|asdf|xxx|lorem ipsum|select(?: an)? item|[-]+)$/.test(normalized)
-    && !/\b(?:dummy|placeholder|lorem ipsum)\b/.test(normalized);
+  return !/^(?:n a|na|none|select(?: an)? item|[-]+)$/.test(normalized)
+    && !/\b(?:test(?:ing)?|dummy|placeholder|sample|tbd|unknown|asdf|xxx|lorem ipsum)\b/.test(normalized);
 }, `${label} cannot contain placeholder or dummy text`);
 
 export const workOrderFormSchema = z.object({

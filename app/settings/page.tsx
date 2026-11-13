@@ -26,7 +26,7 @@ type SeriesSettings = {
 
 const labels: Record<DocumentSeriesType, { title: string; description: string }> = {
   WORK_ORDER: { title: 'Job Order ID Series', description: 'Used for all newly created Job Orders.' },
-  MRS: { title: 'MRS ID / Number Series', description: 'Used for all newly created Material Requisition Slips.' },
+  MRS: { title: 'SRS ID / Number Series', description: 'Used for all newly created Stock Requisition Slips.' },
   RECEIVING: { title: 'Receiving Report ID / Number Series', description: 'Used for all newly created Receiving Reports.' },
 };
 

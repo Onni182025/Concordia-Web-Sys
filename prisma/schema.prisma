@@ -205,11 +205,13 @@ model WarehouseStock {
   itemId        String
   item          Item      @relation(fields: [itemId], references: [id], onDelete: Cascade)
   warehouse     Warehouse
+  subLocation   String    @default("Unspecified")
   quantity      Decimal   @default(0.0) @db.Decimal(12, 3)
   minStockLevel Decimal   @default(5.0) @db.Decimal(12, 3)
   updatedAt     DateTime  @updatedAt
 
   @@unique([itemId, warehouse])
+  @@index([warehouse, itemId])
 }
 
 model WorkOrder {
@@ -229,11 +231,18 @@ model WorkOrder {
   cancelledBy      String?
   cancelledAt      DateTime?
   cancelReason     String?         @db.Text
+  editedBy         String?
+  editedAt         DateTime?
+  disapprovedBy    String?
+  disapprovedAt    DateTime?
+  disapproveReason String?         @db.Text
   createdById      String
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   items            WorkOrderItem[]
   mrsList          MRS[]
+
+  @@index([status, createdAt])
 }
 
 model WorkOrderItem {
@@ -244,6 +253,8 @@ model WorkOrderItem {
   item            Item      @relation(fields: [itemId], references: [id])
   quantityNeeded  Decimal   @db.Decimal(12, 3)
   quantityIssued  Decimal   @default(0.0) @db.Decimal(12, 3)
+
+  @@index([workOrderId, itemId])
 }
 
 model MRS {
@@ -261,10 +272,18 @@ model MRS {
   cancelledBy     String?
   cancelledAt     DateTime?
   cancelReason    String?         @db.Text
+  editedBy        String?
+  editedAt        DateTime?
+  disapprovedBy   String?
+  disapprovedAt   DateTime?
+  disapproveReason String?        @db.Text
   createdById     String
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   items           MRSItem[]
+
+  @@index([workOrderId, status, createdAt])
+  @@index([status, createdAt])
 }
 
 model MRSItem {
@@ -283,6 +302,9 @@ model MRSItem {
   quantityRequested Decimal  @db.Decimal(12, 3)
   quantityApproved  Decimal  @default(0.0) @db.Decimal(12, 3)
   quantityIssued    Decimal  @default(0.0) @db.Decimal(12, 3)
+
+  @@index([mrsId, itemId])
+  @@index([itemId])
 }
 
 model Receiving {
@@ -351,4 +373,9 @@ model StockMovement {
   supplier      String?
   remarks       String?      @db.Text
   createdAt     DateTime     @default(now())
+
+  @@index([itemId, createdAt])
+  @@index([warehouse, createdAt])
+  @@index([type, createdAt])
+  @@index([createdAt])
 }

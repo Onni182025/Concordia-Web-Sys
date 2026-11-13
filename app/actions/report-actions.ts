@@ -55,7 +55,7 @@ export async function getReportData(
   filters: ReportFilters,
   userId: string,
   page = 1,
-): Promise<{ rows: ReportRow[]; departments: string[]; totalRows: number }> {
+): Promise<{ rows: ReportRow[]; departments: string[]; totalRows: number; reportDate?: string }> {
   if (!reportKeySet.has(report)) throw new Error('Unknown report.');
   if (!Number.isInteger(page) || page < 1) throw new Error('Select a valid report page.');
   await requirePermission(userId, 'reports:view');
@@ -69,6 +69,7 @@ export async function getReportData(
     case 'stock-inventory':
     case 'low-stock': {
       if (report === 'stock-inventory') {
+        const reportDate = new Date().toISOString().slice(0, 10);
         const locations: Warehouse[] = warehouse ? [warehouse] : ['FARM', 'ENGINEERING'];
         const sourcePageSize = Math.max(1, Math.floor(PAGE_SIZE / locations.length));
         const [items, totalItems] = await Promise.all([
@@ -90,11 +91,13 @@ export async function getReportData(
               quantity: stock ? n(stock.quantity) : 0,
               unit: item.unit,
               reorderLevel: stock ? n(stock.minStockLevel) : 0,
-              location: location === 'FARM' ? 'Farm Warehouse' : 'Engineering Warehouse',
+              warehouse: location === 'FARM' ? 'Farm Warehouse' : 'Engineering Warehouse',
+              location: stock?.subLocation || 'Unspecified',
             };
           })),
           departments,
           totalRows: totalItems * locations.length,
+          reportDate,
         };
       }
 
@@ -110,8 +113,9 @@ export async function getReportData(
           quantity: unknown;
           minStockLevel: unknown;
           warehouse: Warehouse;
+          subLocation: string;
         }>>(Prisma.sql`
-          SELECT i.code, i.name, i.category, i.unit, ws."quantity", ws."minStockLevel", ws."warehouse"
+          SELECT i.code, i.name, i.category, i.unit, ws."quantity", ws."minStockLevel", ws."warehouse", ws."subLocation"
           FROM "WarehouseStock" AS ws
           INNER JOIN "Item" AS i ON i.id = ws."itemId"
           WHERE ${lowStockWhere}
@@ -132,7 +136,8 @@ export async function getReportData(
           quantity: n(stock.quantity),
           unit: stock.unit,
           reorderLevel: n(stock.minStockLevel),
-          location: stock.warehouse === 'FARM' ? 'Farm Warehouse' : 'Engineering Warehouse',
+          warehouse: stock.warehouse === 'FARM' ? 'Farm Warehouse' : 'Engineering Warehouse',
+          location: stock.subLocation,
         })),
         departments,
         totalRows: n(countResult[0]?.total ?? 0),

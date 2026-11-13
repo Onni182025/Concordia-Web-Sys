@@ -35,12 +35,12 @@ export const mrsItemSchema = z.object({
 export const mrsFormSchema = z.object({
   dateRequested: z.string().min(1, 'Date Requested is required'),
   dateNeeded: z.string().min(1, 'Date Needed is required'),
-  department: z.string().min(1, 'Requesting Department is required'),
-  requestedBy: z.string().min(1, 'Requested By is required'),
+  department: z.string().trim().min(1, 'Requesting Department is required'),
+  requestedBy: z.string().trim().min(1, 'Requested By is required'),
   purposeCategory: z.string().min(1, 'Purpose Category is required'),
   workOrderReference: z.string().optional(),
   workOrderId: z.string().optional(),
-  preparedBy: z.string().min(1, 'Prepared By is required'),
+  preparedBy: z.string().trim().min(1, 'Prepared By is required'),
   items: z.array(mrsItemSchema).min(1, 'At least one material item is required'),
 });
 

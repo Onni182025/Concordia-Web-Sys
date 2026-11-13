@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import type { WorkOrder, Item, Permission, Role, WarehouseStock } from '@/lib/erp-types';
-import { cancelWorkOrder, createWorkOrder, getDocumentNumberPreview, getWorkOrderFormData, getWorkOrderListPage, updateWorkOrderStatus } from '@/app/actions/erp-actions';
+import { cancelWorkOrder, createWorkOrder, disapproveWorkOrder, getDocumentNumberPreview, getWorkOrderFormData, getWorkOrderListPage, updateWorkOrder, updateWorkOrderStatus } from '@/app/actions/erp-actions';
 import { useAuth } from '@/hooks/use-auth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -13,10 +13,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Plus, Search, FileText, AlertCircle, CheckCircle2, ClipboardList, ArrowRight, HelpCircle, CircleCheck, PackageCheck, ExternalLink } from 'lucide-react';
+import { Plus, Search, FileText, AlertCircle, CheckCircle2, ClipboardList, ArrowRight, HelpCircle, CircleCheck, PackageCheck, ExternalLink, Pencil } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import { can } from '@/lib/rbac';
+import { can, canDisapproveRequest } from '@/lib/rbac';
 import { workOrderFormSchema } from '@/lib/schemas/work-order-schema';
 import { PrintWorkOrderButton } from './print-work-order-button';
 import { TablePagination } from '@/components/shared/table-pagination';
@@ -30,6 +30,7 @@ export default function WorkOrdersPage() {
   const [listPage, setListPage] = useState(1);
   const [listTotal, setListTotal] = useState(0);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [editingWorkOrderId, setEditingWorkOrderId] = useState<string | null>(null);
   const [selectedWO, setSelectedWO] = useState<WorkOrder | null>(null);
   const [workOrderNumberPreview, setWorkOrderNumberPreview] = useState('');
 
@@ -49,6 +50,21 @@ export default function WorkOrdersPage() {
   const [woItems, setWoItems] = useState<{ itemId: string; quantityNeeded: number }[]>([]);
   const [currentItemId, setCurrentItemId] = useState('');
   const [currentQty, setCurrentQty] = useState('1');
+
+  const openEditWorkOrder = (workOrder: WorkOrder) => {
+    setEditingWorkOrderId(workOrder.id);
+    setType(workOrder.type);
+    setDateNeeded(workOrder.dateNeeded.slice(0, 10));
+    setDepartment(workOrder.department);
+    setMachineEquipment(workOrder.machineEquipment);
+    setAreaBuilding(workOrder.areaBuilding);
+    setSpecification(workOrder.specification);
+    setDescription(workOrder.description);
+    setPriority(workOrder.priority);
+    setRequestedBy(workOrder.requestedBy);
+    setWoItems((workOrder.items || []).map(item => ({ itemId: item.itemId, quantityNeeded: item.quantityNeeded })));
+    setIsCreateOpen(true);
+  };
 
   useEffect(() => {
     if (!user?.id) return;
@@ -109,15 +125,21 @@ export default function WorkOrdersPage() {
 
     try {
       if (!user?.id) throw new Error('You must be signed in.');
-      const newWO = await createWorkOrder({ type, dateNeeded, department, machineEquipment, areaBuilding, specification, description, priority, requestedBy, createdById: user.id, items: woItems });
+      const savedWO = editingWorkOrderId
+        ? await updateWorkOrder({ id: editingWorkOrderId, userId: user.id, type, dateNeeded, department, machineEquipment, areaBuilding, specification, description, priority, requestedBy, items: woItems })
+        : await createWorkOrder({ type, dateNeeded, department, machineEquipment, areaBuilding, specification, description, priority, requestedBy, createdById: user.id, items: woItems });
 
-    toast({
-      title: 'Job Order Created',
-      description: `Successfully created ${newWO.woNumber}.`,
-    });
+      toast({
+        title: editingWorkOrderId ? 'Job Order Updated' : 'Job Order Created',
+        description: editingWorkOrderId
+          ? `${savedWO.woNumber} was returned to Pending for re-approval.`
+          : `Successfully created ${savedWO.woNumber}.`,
+      });
+      if (editingWorkOrderId) setSelectedWO(savedWO);
 
     // Reset Form
     setIsCreateOpen(false);
+    setEditingWorkOrderId(null);
     setWoItems([]);
     setDepartment('');
     setMachineEquipment('');
@@ -133,6 +155,14 @@ export default function WorkOrdersPage() {
       .then(setWorkOrderNumberPreview)
       .catch(error => toast({ title: 'Unable to refresh Job Order number', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' }));
     } catch (error) { toast({ title: 'Unable to create Job Order', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' }); }
+  };
+
+  const handleDisapproveWO = async (woId: string, reason: string) => {
+    if (!user?.id) throw new Error('You must be signed in.');
+    const updated = await disapproveWorkOrder(woId, reason, user.id);
+    setWorkOrders(current => current.map(wo => wo.id === woId ? updated : wo));
+    setSelectedWO(updated);
+    toast({ title: 'Job Order Disapproved', description: `${updated.woNumber} was disapproved.` });
   };
 
   const handleApproveWO = async (woId: string) => {
@@ -180,7 +210,7 @@ export default function WorkOrdersPage() {
           <p className="text-sm text-neutral-500">Manage MRRF and EPRF requests from the Engineering Department</p>
         </div>
 
-        {user && can(user.role, 'work-orders:create', user.permissions) && <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+        {user && can(user.role, 'work-orders:create', user.permissions) && <Dialog open={isCreateOpen} onOpenChange={open => { setIsCreateOpen(open); if (!open) setEditingWorkOrderId(null); }}>
           <DialogTrigger asChild>
             <Button className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2">
               <Plus className="h-4 w-4" /> New Job Order
@@ -188,9 +218,9 @@ export default function WorkOrdersPage() {
           </DialogTrigger>
           <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Create New Job Order / Maintenance Request</DialogTitle>
+              <DialogTitle>{editingWorkOrderId ? 'Edit Job Order' : 'Create New Job Order / Maintenance Request'}</DialogTitle>
               <DialogDescription>
-                Fill in the official form details. Review stock availability, then create a linked MRS from Job Order details when materials are needed.
+                Fill in the official form details. Review stock availability, then create a linked Stock Requisition from Job Order details when materials are needed.
               </DialogDescription>
             </DialogHeader>
 
@@ -342,7 +372,7 @@ export default function WorkOrdersPage() {
                                 <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">In Stock</Badge>
                               ) : (
                                 <Badge className="bg-amber-100 text-amber-800 border-amber-200">
-                                Deficit: {woItem.quantityNeeded - available} (MRS Required)
+                                Deficit: {woItem.quantityNeeded - available} (Stock Requisition Required)
                                 </Badge>
                               )}
                             </TableCell>
@@ -361,7 +391,7 @@ export default function WorkOrdersPage() {
 
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-                <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white">Submit Job Order</Button>
+                <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white">{editingWorkOrderId ? 'Save Changes · Request Approval' : 'Submit Job Order'}</Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -437,7 +467,7 @@ export default function WorkOrdersPage() {
                           "bg-neutral-500 text-white"
                         )}
                       >
-                        {wo.status === 'REJECTED' ? 'Cancelled' : wo.status.replace(/_/g, ' ')}
+                        {wo.status === 'REJECTED' ? wo.disapprovedBy ? 'Disapproved' : 'Cancelled' : wo.status.replace(/_/g, ' ')}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
@@ -458,7 +488,7 @@ export default function WorkOrdersPage() {
                             </DialogDescription>
                           </DialogHeader>
 
-                          {selectedWO && <WorkOrderDetails workOrder={selectedWO} items={items} stocks={stocks} userRole={user?.role} userPermissions={user?.permissions} onApprove={handleApproveWO} onStatusChange={handleStatusChange} onCancel={handleCancelWorkOrder} />}
+                          {selectedWO && <WorkOrderDetails workOrder={selectedWO} items={items} stocks={stocks} userRole={user?.role} userPermissions={user?.permissions} onApprove={handleApproveWO} onStatusChange={handleStatusChange} onCancel={handleCancelWorkOrder} onDisapprove={handleDisapproveWO} onEdit={openEditWorkOrder} />}
                         </DialogContent>
                       </Dialog>
                     </TableCell>
@@ -474,10 +504,13 @@ export default function WorkOrdersPage() {
   );
 }
 
-function WorkOrderDetails({ workOrder, items, stocks, userRole, userPermissions, onApprove, onStatusChange, onCancel }: { workOrder: WorkOrder; items: Item[]; stocks: WarehouseStock[]; userRole?: Role; userPermissions?: Permission[]; onApprove: (id: string) => Promise<void>; onStatusChange: (id: string, status: WorkOrder['status']) => Promise<void>; onCancel: (id: string, reason: string) => Promise<void> }) {
+function WorkOrderDetails({ workOrder, items, stocks, userRole, userPermissions, onApprove, onStatusChange, onCancel, onDisapprove, onEdit }: { workOrder: WorkOrder; items: Item[]; stocks: WarehouseStock[]; userRole?: Role; userPermissions?: Permission[]; onApprove: (id: string) => Promise<void>; onStatusChange: (id: string, status: WorkOrder['status']) => Promise<void>; onCancel: (id: string, reason: string) => Promise<void>; onDisapprove: (id: string, reason: string) => Promise<void>; onEdit: (workOrder: WorkOrder) => void }) {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [disapproveOpen, setDisapproveOpen] = useState(false);
+  const [disapproveReason, setDisapproveReason] = useState('');
+  const [disapproving, setDisapproving] = useState(false);
   const mrsList = workOrder.mrsList || [];
   const activeMRSList = mrsList.filter(mrs => mrs.status !== 'REJECTED');
   const allItemsCoveredByMRS = (workOrder.items || []).length === 0 || (workOrder.items || []).every(orderItem => {
@@ -491,8 +524,8 @@ function WorkOrderDetails({ workOrder, items, stocks, userRole, userPermissions,
     && (workOrder.type !== 'MRRF' || can(userRole, 'work-orders:mrrf:approve', userPermissions));
   const stages = [
     { label: 'Requested', done: true },
-    { label: 'Approved', done: workOrder.status !== 'PENDING' },
-    { label: 'MRS Created', done: mrsList.length > 0 },
+    { label: 'Approved', done: workOrder.status === 'APPROVED' || workOrder.status === 'IN_PROGRESS' || workOrder.status === 'COMPLETED' },
+    { label: 'SRS Created', done: mrsList.length > 0 },
     { label: 'Materials Issued', done: allMaterialsIssued },
     { label: workOrder.status === 'COMPLETED' ? 'Completed' : 'In Progress', done: workOrder.status === 'COMPLETED' || workOrder.status === 'IN_PROGRESS' },
   ];
@@ -503,13 +536,26 @@ function WorkOrderDetails({ workOrder, items, stocks, userRole, userPermissions,
     <div className="flex justify-end">
       <PrintWorkOrderButton workOrder={workOrder} items={items} />
     </div>
-    <div className="flex flex-col gap-3 rounded-xl border bg-emerald-50/60 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">Job Order</p><h2 className="text-xl font-bold text-neutral-900">{workOrder.woNumber}</h2></div><div className="flex flex-wrap gap-2"><Badge variant="outline" className="border-emerald-200 bg-white text-emerald-800">{workOrder.type}</Badge><Badge className={priorityClass}>{workOrder.priority}</Badge><Badge className={statusClass}>{workOrder.status === 'REJECTED' ? 'Cancelled' : workOrder.status.replace(/_/g, ' ')}</Badge></div></div>
-    {workOrder.status === 'REJECTED' && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900"><p><strong>Cancelled by:</strong> {workOrder.cancelledBy || 'Unknown'}{workOrder.cancelledAt ? ` · ${new Date(workOrder.cancelledAt).toLocaleString()}` : ''}</p><p className="mt-1"><strong>Reason:</strong> {workOrder.cancelReason || 'No reason recorded.'}</p></div>}
+    <div className="flex flex-col gap-3 rounded-xl border bg-emerald-50/60 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">Job Order</p><h2 className="text-xl font-bold text-neutral-900">{workOrder.woNumber}</h2></div><div className="flex flex-wrap gap-2"><Badge variant="outline" className="border-emerald-200 bg-white text-emerald-800">{workOrder.type}</Badge><Badge className={priorityClass}>{workOrder.priority}</Badge><Badge className={statusClass}>{workOrder.status === 'REJECTED' ? workOrder.disapprovedBy ? 'Disapproved' : 'Cancelled' : workOrder.status.replace(/_/g, ' ')}</Badge></div></div>
+    {workOrder.status === 'REJECTED' && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900"><p><strong>{workOrder.disapprovedBy ? 'Disapproved by:' : 'Cancelled by:'}</strong> {workOrder.disapprovedBy || workOrder.cancelledBy || 'Unknown'}{(workOrder.disapprovedAt || workOrder.cancelledAt) ? ` · ${new Date(workOrder.disapprovedAt || workOrder.cancelledAt!).toLocaleString()}` : ''}</p><p className="mt-1"><strong>Reason:</strong> {workOrder.disapproveReason || workOrder.cancelReason || 'No reason recorded.'}</p></div>}
     <section className="rounded-xl border p-4"><SectionTitle icon={<ArrowRight className="h-4 w-4" />} title="Process Flow & Traceability" /><div className="grid gap-3 sm:grid-cols-5">{stages.map((stage, index) => <div key={stage.label} className="relative flex items-center gap-3 sm:block sm:text-center"><div className={cn('mx-0 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold sm:mx-auto', stage.done ? 'bg-emerald-600 text-white' : 'bg-neutral-100 text-neutral-400')}>{stage.done ? <CircleCheck className="h-4 w-4" /> : index + 1}</div><p className="text-xs font-semibold text-neutral-700 sm:mt-2">{stage.label}</p>{index < stages.length - 1 && <div className="hidden h-px bg-neutral-200 sm:absolute sm:left-[60%] sm:top-[18px] sm:block sm:w-[80%]" />}</div>)}</div></section>
     <section className="rounded-xl border p-4"><SectionTitle icon={<FileText className="h-4 w-4" />} title="Request Information" /><div className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3"><Detail label="Date & Time Requested" value={new Date(workOrder.dateRequested).toLocaleString()} /><Detail label="Date Needed" value={new Date(workOrder.dateNeeded).toLocaleDateString()} /><Detail label="Requested By" value={workOrder.requestedBy} /><Detail label="Department" value={workOrder.department} /><Detail label="Machine / Equipment" value={workOrder.machineEquipment} /><Detail label="Area / Building" value={workOrder.areaBuilding} /><Detail label="Specification" value={workOrder.specification || 'No specification provided'} wide /><Detail label="Description of Trouble / Breakdown" value={workOrder.description} wide /></div></section>
     <section className="rounded-xl border p-4"><SectionTitle icon={<PackageCheck className="h-4 w-4" />} title="Items / Materials Needed" />{workOrder.items?.length ? <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Item Code / Name</TableHead><TableHead className="text-right">Quantity</TableHead><TableHead>Unit</TableHead><TableHead className="text-right">Stock Availability</TableHead><TableHead>Issuance Status</TableHead></TableRow></TableHeader><TableBody>{workOrder.items.map(orderItem => { const item = orderItem.item || items.find(value => value.id === orderItem.itemId); const available = stocks.filter(stock => stock.itemId === orderItem.itemId).reduce((total, stock) => total + stock.quantity, 0); const itemMRS = activeMRSList.flatMap(mrs => mrs.items).filter(mrsItem => mrsItem.itemId === orderItem.itemId); const issued = itemMRS.reduce((total, mrsItem) => total + mrsItem.quantityIssued, 0); const requested = itemMRS.reduce((total, mrsItem) => total + mrsItem.quantityRequested, 0); const issuanceStatus = itemMRS.length === 0 ? 'Not Requisitioned' : issued >= orderItem.quantityNeeded ? 'Issued' : issued > 0 ? 'Partially Issued' : 'Pending'; const issuanceClass = issuanceStatus === 'Issued' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : issuanceStatus === 'Partially Issued' ? 'bg-amber-100 text-amber-800 border-amber-200' : issuanceStatus === 'Pending' ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-neutral-100 text-neutral-700 border-neutral-200'; return <TableRow key={orderItem.id}><TableCell><p className="font-semibold">{item?.code || 'Unknown item'}</p><p className="text-xs text-neutral-500">{item?.name || orderItem.itemId}</p></TableCell><TableCell className="text-right font-semibold">{orderItem.quantityNeeded}</TableCell><TableCell>{item?.unit || '-'}</TableCell><TableCell className={cn('text-right font-semibold', available >= orderItem.quantityNeeded ? 'text-emerald-700' : 'text-red-600')}>{available} {item?.unit || ''}</TableCell><TableCell><Badge className={issuanceClass}>{issuanceStatus}{issuanceStatus === 'Partially Issued' ? ` · ${issued} / ${orderItem.quantityNeeded}` : requested > 0 && issuanceStatus === 'Pending' ? ` · ${requested} requested` : ''}</Badge></TableCell></TableRow>; })}</TableBody></Table></div> : <EmptyState text="No materials were added to this Job Order." />}</section>
-    <section className="rounded-xl border p-4"><SectionTitle icon={<ClipboardList className="h-4 w-4" />} title="Linked Material Requisition Slips (MRS)" />{mrsList.length ? <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>MRS Number</TableHead><TableHead>Creation Date</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Manage</TableHead></TableRow></TableHeader><TableBody>{mrsList.map(mrs => <TableRow key={mrs.id}><TableCell className="font-semibold text-emerald-700">{mrs.mrsNumber}</TableCell><TableCell>{new Date(mrs.createdAt).toLocaleDateString()}</TableCell><TableCell><Badge variant="outline">{mrs.status}</Badge></TableCell><TableCell className="text-right"><Button variant="outline" size="sm" asChild><Link href={`/mrs?mrsNumber=${encodeURIComponent(mrs.mrsNumber)}`}>View / Manage <ExternalLink className="ml-2 h-3 w-3" /></Link></Button></TableCell></TableRow>)}</TableBody></Table></div> : <EmptyState text="No Material Requisition created yet" />}</section>
-    {can(userRole, 'work-orders:view', userPermissions) && <DialogFooter className="border-t pt-4"><div className="flex w-full flex-wrap justify-end gap-2">{workOrder.status === 'PENDING' && canApproveWorkOrder && <Button className="bg-emerald-600 text-white hover:bg-emerald-700" onClick={() => void onApprove(workOrder.id)}><CheckCircle2 className="mr-2 h-4 w-4" />Approve</Button>}{workOrder.status === 'APPROVED' && can(userRole, 'work-orders:approve', userPermissions) && <Button variant="outline" disabled={!allMaterialsIssued} onClick={() => void onStatusChange(workOrder.id, 'IN_PROGRESS')}>Start Work</Button>}{workOrder.status === 'IN_PROGRESS' && can(userRole, 'work-orders:approve', userPermissions) && <Button className="bg-emerald-600 text-white hover:bg-emerald-700" disabled={!allMaterialsIssued} onClick={() => void onStatusChange(workOrder.id, 'COMPLETED')}><CheckCircle2 className="mr-2 h-4 w-4" />Mark as Completed</Button>}{can(userRole, 'mrs:create', userPermissions) && <Button className="bg-emerald-600 text-white hover:bg-emerald-700" asChild disabled={allItemsCoveredByMRS || workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED'}><Link aria-disabled={allItemsCoveredByMRS || workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED'} tabIndex={allItemsCoveredByMRS || workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED' ? -1 : undefined} className={allItemsCoveredByMRS || workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED' ? 'pointer-events-none' : undefined} href={`/mrs/new?workOrderId=${encodeURIComponent(workOrder.id)}`}>Create MRS</Link></Button>}{(userRole === 'ENGINEERING_SUPERVISOR' || userRole === 'SUPER_ADMIN') && workOrder.status !== 'APPROVED' && workOrder.status !== 'REJECTED' && <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><Button type="button" variant="destructive" onClick={() => setCancelOpen(true)}>Cancel Job Order</Button><DialogContent><DialogHeader><DialogTitle>Cancel Job Order {workOrder.woNumber}?</DialogTitle><DialogDescription>This action cannot be undone. Enter a reason to cancel this Job Order.</DialogDescription></DialogHeader><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} maxLength={2000} placeholder="Cancellation reason (required)" /><DialogFooter><Button type="button" variant="outline" onClick={() => setCancelOpen(false)}>Keep Job Order</Button><Button type="button" variant="destructive" disabled={!cancelReason.trim() || cancelling} onClick={() => { setCancelling(true); void onCancel(workOrder.id, cancelReason).then(() => { setCancelReason(''); setCancelOpen(false); }).catch(() => undefined).finally(() => setCancelling(false)); }}>{cancelling ? 'Cancelling…' : 'Confirm Cancellation'}</Button></DialogFooter></DialogContent></Dialog>}</div></DialogFooter>}
+    <section className="rounded-xl border p-4"><SectionTitle icon={<ClipboardList className="h-4 w-4" />} title="Linked Stock Requisition Slips (SRS)" />{mrsList.length ? <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>SRS Number</TableHead><TableHead>Creation Date</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Manage</TableHead></TableRow></TableHeader><TableBody>{mrsList.map(mrs => <TableRow key={mrs.id}><TableCell className="font-semibold text-emerald-700">{mrs.mrsNumber}</TableCell><TableCell>{new Date(mrs.createdAt).toLocaleDateString()}</TableCell><TableCell><Badge variant="outline">{mrs.status === 'REJECTED' ? mrs.disapprovedBy ? 'Disapproved' : 'Cancelled' : mrs.status}</Badge></TableCell><TableCell className="text-right"><Button variant="outline" size="sm" asChild><Link href={`/mrs?mrsNumber=${encodeURIComponent(mrs.mrsNumber)}`}>View / Manage <ExternalLink className="ml-2 h-3 w-3" /></Link></Button></TableCell></TableRow>)}</TableBody></Table></div> : <EmptyState text="No Stock Requisition created yet" />}</section>
+    {can(userRole, 'work-orders:view', userPermissions) && <DialogFooter className="border-t pt-4"><div className="flex w-full flex-wrap justify-end gap-2">{(workOrder.status === 'PENDING' || workOrder.status === 'IN_PROGRESS' || (workOrder.status === 'REJECTED' && Boolean(workOrder.disapprovedBy))) && can(userRole, 'work-orders:create', userPermissions) && <Button type="button" variant="outline" onClick={() => onEdit(workOrder)}><Pencil className="mr-2 h-4 w-4" />{workOrder.disapprovedBy ? 'Rework Job Order' : 'Edit Job Order'}</Button>}{workOrder.status === 'PENDING' && canApproveWorkOrder && <Button className="bg-emerald-600 text-white hover:bg-emerald-700" onClick={() => void onApprove(workOrder.id)}><CheckCircle2 className="mr-2 h-4 w-4" />Approve</Button>}{workOrder.status === 'PENDING' && canApproveWorkOrder && canDisapproveRequest(userRole, 'work-orders:approve', userPermissions) && <Button type="button" variant="destructive" onClick={() => { setDisapproveReason(''); setDisapproveOpen(true); }}>Disapprove</Button>}{workOrder.status === 'APPROVED' && can(userRole, 'work-orders:approve', userPermissions) && <Button variant="outline" disabled={!allMaterialsIssued} onClick={() => void onStatusChange(workOrder.id, 'IN_PROGRESS')}>Start Work</Button>}{workOrder.status === 'IN_PROGRESS' && can(userRole, 'work-orders:approve', userPermissions) && <Button className="bg-emerald-600 text-white hover:bg-emerald-700" disabled={!allMaterialsIssued} onClick={() => void onStatusChange(workOrder.id, 'COMPLETED')}><CheckCircle2 className="mr-2 h-4 w-4" />Mark as Completed</Button>}{can(userRole, 'mrs:create', userPermissions) && <Button className="bg-emerald-600 text-white hover:bg-emerald-700" asChild disabled={allItemsCoveredByMRS || workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED'}><Link aria-disabled={allItemsCoveredByMRS || workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED'} tabIndex={allItemsCoveredByMRS || workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED' ? -1 : undefined} className={allItemsCoveredByMRS || workOrder.status === 'COMPLETED' || workOrder.status === 'REJECTED' ? 'pointer-events-none' : undefined} href={`/mrs/new?workOrderId=${encodeURIComponent(workOrder.id)}`}>Create Stock Requisition</Link></Button>}{(userRole === 'ENGINEERING_SUPERVISOR' || userRole === 'SUPER_ADMIN') && workOrder.status !== 'APPROVED' && workOrder.status !== 'REJECTED' && <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><Button type="button" variant="destructive" onClick={() => setCancelOpen(true)}>Cancel Job Order</Button><DialogContent><DialogHeader><DialogTitle>Cancel Job Order {workOrder.woNumber}?</DialogTitle><DialogDescription>This action cannot be undone. Enter a reason to cancel this Job Order.</DialogDescription></DialogHeader><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} maxLength={2000} placeholder="Cancellation reason (required)" /><DialogFooter><Button type="button" variant="outline" onClick={() => setCancelOpen(false)}>Keep Job Order</Button><Button type="button" variant="destructive" disabled={!cancelReason.trim() || cancelling} onClick={() => { setCancelling(true); void onCancel(workOrder.id, cancelReason).then(() => { setCancelReason(''); setCancelOpen(false); }).catch(() => undefined).finally(() => setCancelling(false)); }}>{cancelling ? 'Cancelling…' : 'Confirm Cancellation'}</Button></DialogFooter></DialogContent></Dialog>}</div></DialogFooter>}
+    <Dialog open={disapproveOpen} onOpenChange={open => { if (!disapproving) setDisapproveOpen(open); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Disapprove Job Order {workOrder.woNumber}?</DialogTitle><DialogDescription>This request will be blocked until it is reworked and resubmitted for approval.</DialogDescription></DialogHeader>
+        <Textarea value={disapproveReason} onChange={event => setDisapproveReason(event.target.value)} maxLength={2000} placeholder="Disapproval reason (required)" />
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setDisapproveOpen(false)} disabled={disapproving}>Keep Job Order</Button>
+          <Button type="button" variant="destructive" disabled={!disapproveReason.trim() || disapproving} onClick={() => {
+            setDisapproving(true);
+            void onDisapprove(workOrder.id, disapproveReason).then(() => setDisapproveOpen(false)).catch(() => undefined).finally(() => setDisapproving(false));
+          }}>{disapproving ? 'Disapproving…' : 'Confirm Disapproval'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>;
 }
 

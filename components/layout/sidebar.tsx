@@ -46,7 +46,7 @@ export default function Sidebar() {
       permission: 'work-orders:view'
     },
     {
-      title: 'Material Requisitions',
+      title: 'Stock Requisitions',
       href: '/mrs',
       icon: ClipboardList,
       permission: 'mrs:view'
@@ -124,7 +124,7 @@ export default function Sidebar() {
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
                 isActive 
                   ? "bg-emerald-600 text-white shadow-md shadow-emerald-900/20" 
-                  : "text-neutral-400 hover:bg-neutral-800 hover:text-white"
+                  : "text-neutral-400 hover:bg-emerald-950 hover:text-emerald-100 focus-visible:bg-emerald-950 focus-visible:text-emerald-100"
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />
@@ -142,7 +142,7 @@ export default function Sidebar() {
                 'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-all duration-200',
                 pathname.startsWith('/reports')
                   ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/20'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white',
+                  : 'text-neutral-400 hover:bg-emerald-950 hover:text-emerald-100 focus-visible:bg-emerald-950 focus-visible:text-emerald-100',
               )}
             >
               <BarChart3 className="h-4 w-4 shrink-0" />
@@ -160,7 +160,7 @@ export default function Sidebar() {
                       href={href}
                       className={cn(
                         'block rounded-md px-3 py-2 text-xs font-medium transition-colors',
-                        isActive ? 'bg-emerald-700 text-white' : 'text-neutral-400 hover:bg-neutral-800 hover:text-white',
+                        isActive ? 'bg-emerald-700 text-white' : 'text-neutral-400 hover:bg-emerald-950 hover:text-emerald-100 focus-visible:bg-emerald-950 focus-visible:text-emerald-100',
                       )}
                     >
                       {report.label}
@@ -182,7 +182,7 @@ export default function Sidebar() {
               "mb-2 flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
               pathname === '/settings'
                 ? "bg-emerald-600 text-white"
-                : "text-neutral-400 hover:bg-neutral-800 hover:text-white"
+                : "text-neutral-400 hover:bg-emerald-950 hover:text-emerald-100 focus-visible:bg-emerald-950 focus-visible:text-emerald-100"
             )}
           >
             <Settings className="h-4 w-4" />

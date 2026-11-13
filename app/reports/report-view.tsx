@@ -49,6 +49,7 @@ export default function ReportView({ report }: ReportViewProps) {
   const [totalRows, setTotalRows] = useState(0);
   const [page, setPage] = useState(1);
   const [departments, setDepartments] = useState<string[]>([]);
+  const [reportDate, setReportDate] = useState('');
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [printing, setPrinting] = useState(false);
@@ -65,6 +66,7 @@ export default function ReportView({ report }: ReportViewProps) {
         setRows(result.rows);
         setTotalRows(result.totalRows);
         setDepartments(result.departments);
+        if (result.reportDate) setReportDate(result.reportDate);
         setError('');
       })
       .catch(cause => {
@@ -104,6 +106,7 @@ export default function ReportView({ report }: ReportViewProps) {
     try {
       const allRows = await getAllRows();
       const csv = [
+        ...(report === 'stock-inventory' ? [csvCell(`Stock inventory as of ${reportDate || new Date().toISOString().slice(0, 10)}`)] : []),
         definition.columns.map(column => csvCell(column.label)).join(','),
         ...allRows.map(row => definition.columns.map(column => csvCell(row[column.key])).join(',')),
       ].join('\r\n');
@@ -272,7 +275,10 @@ export default function ReportView({ report }: ReportViewProps) {
       <Card className="report-content shadow-sm">
         <CardHeader className="border-b">
           <CardTitle className="text-base">{definition.title}</CardTitle>
-          <CardDescription>{loading ? 'Loading report data…' : `${totalRows.toLocaleString()} record${totalRows === 1 ? '' : 's'}`}</CardDescription>
+          <CardDescription>
+            {loading ? 'Loading report data…' : `${totalRows.toLocaleString()} record${totalRows === 1 ? '' : 's'}`}
+            {report === 'stock-inventory' && <span className="ml-2 font-medium text-neutral-700">· Inventory date: {reportDate || new Date().toISOString().slice(0, 10)} (current balance)</span>}
+          </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-x-auto">

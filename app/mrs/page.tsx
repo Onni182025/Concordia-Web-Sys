@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import type { MRS, Item, Warehouse } from '@/lib/erp-types';
-import { approveMRS, cancelMRS, getMRSListPage, getMRSPageReferenceData, issueMRS } from '@/app/actions/erp-actions';
+import { approveMRS, cancelMRS, disapproveMRS, getMRSListPage, getMRSPageReferenceData, issueMRS } from '@/app/actions/erp-actions';
 import { useAuth } from '@/hooks/use-auth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Search, ClipboardList, Plus } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import { can, warehouseForRole } from '@/lib/rbac';
+import { can, canDisapproveRequest, warehouseForRole } from '@/lib/rbac';
 import { TablePagination } from '@/components/shared/table-pagination';
 
 export default function MRSPage() {
@@ -35,6 +35,9 @@ export default function MRSPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
+  const [disapproveOpen, setDisapproveOpen] = useState(false);
+  const [disapproveReason, setDisapproveReason] = useState('');
+  const [isDisapproving, setIsDisapproving] = useState(false);
   const restrictedWarehouse: Warehouse | null = warehouseForRole(user?.role);
 
   useEffect(() => {
@@ -69,12 +72,12 @@ export default function MRSPage() {
       const updated = await approveMRS(mrsId, user.id);
       setMRSList(current => current.map(mrs => mrs.id === mrsId ? updated : mrs));
       setSelectedMRS(updated);
-      toast({ title: 'MRS Approved', description: 'The Material Requisition Slip has been approved.' });
-    } catch (error) { toast({ title: 'Unable to approve MRS', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' }); }
+      toast({ title: 'Stock Requisition Approved', description: 'The Stock Requisition Slip has been approved.' });
+    } catch (error) { toast({ title: 'Unable to approve Stock Requisition', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' }); }
   };
 
   const handleIssueMRS = async (mrsId: string) => {
-    if (isIssuing || !window.confirm('Issue this MRS and deduct the approved quantities from inventory?')) return;
+    if (isIssuing || !window.confirm('Issue this Stock Requisition and deduct the approved quantities from inventory?')) return;
     setIsIssuing(true);
     try {
       if (!user || !can(user.role, 'mrs:issue', user.permissions)) throw new Error('You do not have permission to issue material requisitions.');
@@ -82,8 +85,8 @@ export default function MRSPage() {
       const updated = await issueMRS(mrsId, issueWarehouse, user.id);
       setMRSList(current => current.map(mrs => mrs.id === mrsId ? updated : mrs));
       setSelectedMRS(updated);
-      toast({ title: 'MRS Issued', description: 'Stock was deducted and the Material Requisition Slip is now Issued.' });
-    } catch (error) { toast({ title: 'Unable to issue MRS', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' }); }
+      toast({ title: 'Stock Requisition Issued', description: 'Stock was deducted and the Stock Requisition Slip is now Issued.' });
+    } catch (error) { toast({ title: 'Unable to issue Stock Requisition', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' }); }
     finally { setIsIssuing(false); }
   };
 
@@ -96,11 +99,28 @@ export default function MRSPage() {
       setSelectedMRS(updated);
       setCancelOpen(false);
       setCancelReason('');
-      toast({ title: 'MRS Cancelled', description: `${updated.mrsNumber} was cancelled.` });
+      toast({ title: 'Stock Requisition Cancelled', description: `${updated.mrsNumber} was cancelled.` });
     } catch (error) {
-      toast({ title: 'Unable to cancel MRS', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' });
+      toast({ title: 'Unable to cancel Stock Requisition', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' });
     } finally {
       setIsCancelling(false);
+    }
+  };
+
+  const handleDisapproveMRS = async () => {
+    if (!selectedMRS || !user?.id) return;
+    setIsDisapproving(true);
+    try {
+      const updated = await disapproveMRS(selectedMRS.id, disapproveReason, user.id);
+      setMRSList(current => current.map(mrs => mrs.id === updated.id ? updated : mrs));
+      setSelectedMRS(updated);
+      setDisapproveOpen(false);
+      setDisapproveReason('');
+      toast({ title: 'Stock Requisition Disapproved', description: `${updated.mrsNumber} was disapproved.` });
+    } catch (error) {
+      toast({ title: 'Unable to disapprove requisition', description: error instanceof Error ? error.message : 'Database operation failed.', variant: 'destructive' });
+    } finally {
+      setIsDisapproving(false);
     }
   };
 
@@ -282,7 +302,7 @@ export default function MRSPage() {
               <div class="meta-item"><div class="label">No.</div><div class="value">${mrs.mrsNumber}</div></div>
               <div class="meta-item"><div class="label">Date Issued</div><div class="value">${issuedAt}</div></div>
               <div class="meta-item"><div class="label">Issued to</div><div class="value">${mrs.department || mrs.requestedBy}</div></div>
-              <div class="meta-item"><div class="label">SRS / MRS No.</div><div class="value">${mrs.mrsNumber}</div></div>
+              <div class="meta-item"><div class="label">SRS No.</div><div class="value">${mrs.mrsNumber}</div></div>
             </div>
             <table>
               <thead>
@@ -323,13 +343,13 @@ export default function MRSPage() {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-neutral-900">Material Requisition Slips (MRS)</h1>
-          <p className="text-sm text-neutral-500">Track, create, and approve material requisitions across departments</p>
+          <h1 className="text-2xl font-bold tracking-tight text-neutral-900">Stock Requisition Slips (SRS)</h1>
+          <p className="text-sm text-neutral-500">Track, create, and approve stock requisitions across departments</p>
         </div>
 
         {can(user?.role, 'mrs:create', user?.permissions) && <Link href="/mrs/new">
           <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-2">
-            <Plus className="h-4 w-4" /> Create New MRS
+            <Plus className="h-4 w-4" /> Create Stock Requisition
           </Button>
         </Link>}
       </div>
@@ -338,20 +358,20 @@ export default function MRSPage() {
       <div className="flex items-center gap-3 bg-white p-4 rounded-xl border shadow-sm">
         <Search className="h-5 w-5 text-neutral-400" />
         <Input 
-          placeholder="Search by MRS Number, Requester, or Department..." 
+          placeholder="Search by SRS Number, Requester, or Department..." 
           value={searchQuery}
           onChange={e => { setSearchQuery(e.target.value); setListPage(1); }}
           className="border-none shadow-none focus-visible:ring-0"
         />
       </div>
 
-      {/* MRS Table */}
+      {/* Stock Requisition Table */}
       <Card className="shadow-sm">
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>MRS Number</TableHead>
+                <TableHead>SRS Number</TableHead>
                 <TableHead>Department</TableHead>
                 <TableHead>Linked Job Order</TableHead>
                 <TableHead>Purpose Category</TableHead>
@@ -365,7 +385,7 @@ export default function MRSPage() {
               {filteredMRS.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center py-8 text-neutral-400">
-                    No Material Requisition Slips found.
+                    No Stock Requisition Slips found.
                   </TableCell>
                 </TableRow>
               ) : (
@@ -392,7 +412,7 @@ export default function MRSPage() {
                             "bg-neutral-500 text-white"
                           )}
                         >
-                          {(mrs.status === 'ISSUED' || mrs.status === 'FULFILLED') ? 'ISSUED' : mrs.status === 'REJECTED' ? 'Cancelled' : mrs.status}
+                          {(mrs.status === 'ISSUED' || mrs.status === 'FULFILLED') ? 'ISSUED' : mrs.status === 'REJECTED' ? mrs.disapprovedBy ? 'Disapproved' : 'Cancelled' : mrs.status}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -406,7 +426,7 @@ export default function MRSPage() {
                             <DialogHeader>
                               <DialogTitle className="flex items-center gap-2">
                                 <ClipboardList className="h-5 w-5 text-emerald-600" />
-                                MRS Details: {selectedMRS?.mrsNumber}
+                                Stock Requisition Details: {selectedMRS?.mrsNumber}
                               </DialogTitle>
                               <DialogDescription>
                                 Requisition details and material line items requested.
@@ -420,7 +440,7 @@ export default function MRSPage() {
                                     <span className="text-xs text-neutral-400 block uppercase">Department</span>
                                     <span className="font-semibold">{selectedMRS.department || 'Engineering'}</span>
                                   </div>
-                                  {selectedMRS.status === 'REJECTED' && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900"><p><strong>Cancelled by:</strong> {selectedMRS.cancelledBy || 'Unknown'}{selectedMRS.cancelledAt ? ` · ${new Date(selectedMRS.cancelledAt).toLocaleString()}` : ''}</p><p className="mt-1"><strong>Reason:</strong> {selectedMRS.cancelReason || 'No reason recorded.'}</p></div>}
+                                  {selectedMRS.status === 'REJECTED' && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900"><p><strong>{selectedMRS.disapprovedBy ? 'Disapproved by:' : 'Cancelled by:'}</strong> {selectedMRS.disapprovedBy || selectedMRS.cancelledBy || 'Unknown'}{(selectedMRS.disapprovedAt || selectedMRS.cancelledAt) ? ` · ${new Date(selectedMRS.disapprovedAt || selectedMRS.cancelledAt!).toLocaleString()}` : ''}</p><p className="mt-1"><strong>Reason:</strong> {selectedMRS.disapproveReason || selectedMRS.cancelReason || 'No reason recorded.'}</p></div>}
                                   <div>
                                     <span className="text-xs text-neutral-400 block uppercase">Requested By</span>
                                     <span className="font-semibold">{selectedMRS.requestedBy}</span>
@@ -442,7 +462,7 @@ export default function MRSPage() {
                                   </div>
                                 )}
 
-                                {/* MRS Items List */}
+                                {/* Stock Requisition items */}
                                 <div className="space-y-3">
                                   <h4 className="font-bold text-sm text-neutral-800">Requested Materials</h4>
                                   <Table>
@@ -484,9 +504,15 @@ export default function MRSPage() {
                                 {(selectedMRS.status === 'PENDING' && can(user?.role, 'mrs:approve', user?.permissions)) ||
                                 (selectedMRS.status === 'APPROVED' && can(user?.role, 'mrs:issue', user?.permissions)) ||
                                 selectedMRS.status === 'ISSUED' ||
+                                (selectedMRS.status === 'REJECTED' && Boolean(selectedMRS.disapprovedBy) && can(user?.role, 'mrs:create', user?.permissions)) ||
                                 canCancelSelectedMRS ? (
                                   <DialogFooter className="flex-col items-stretch gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                                     <div>
+                                      {(selectedMRS.status === 'PENDING' || (selectedMRS.status === 'REJECTED' && Boolean(selectedMRS.disapprovedBy))) && can(user?.role, 'mrs:create', user?.permissions) && (
+                                        <Button type="button" variant="outline" asChild>
+                                          <Link href={`/mrs/new?edit=${encodeURIComponent(selectedMRS.id)}`}>{selectedMRS.disapprovedBy ? 'Rework Stock Requisition' : 'Edit Stock Requisition'}</Link>
+                                        </Button>
+                                      )}
                                       {canCancelSelectedMRS && (
                                         <Button
                                           type="button"
@@ -496,13 +522,18 @@ export default function MRSPage() {
                                             setCancelOpen(true);
                                           }}
                                         >
-                                          Cancel MRS
+                                          Cancel Stock Requisition
                                         </Button>
                                       )}
                                     </div>
                                     {selectedMRS.status === 'PENDING' && can(user?.role, 'mrs:approve', user?.permissions) && (
                                       <Button className="bg-emerald-600 text-white hover:bg-emerald-700" onClick={() => handleApproveMRS(selectedMRS.id)}>
                                         Approve Requisition
+                                      </Button>
+                                    )}
+                                    {selectedMRS.status === 'PENDING' && canDisapproveRequest(user?.role, 'mrs:approve', user?.permissions) && (
+                                      <Button type="button" variant="destructive" onClick={() => { setDisapproveReason(''); setDisapproveOpen(true); }}>
+                                        Disapprove
                                       </Button>
                                     )}
                                     {selectedMRS.status === 'APPROVED' && can(user?.role, 'mrs:issue', user?.permissions) && (
@@ -523,13 +554,28 @@ export default function MRSPage() {
                                 }}>
                                   <DialogContent>
                                     <DialogHeader>
-                                      <DialogTitle>Cancel MRS {selectedMRS.mrsNumber}?</DialogTitle>
+                                      <DialogTitle>Cancel Stock Requisition {selectedMRS.mrsNumber}?</DialogTitle>
                                       <DialogDescription>Enter a reason for cancellation. Issued requisitions cannot be cancelled.</DialogDescription>
                                     </DialogHeader>
                                     <Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} maxLength={2000} placeholder="Cancellation reason (required)" />
                                     <DialogFooter>
-                                      <Button type="button" variant="outline" onClick={() => setCancelOpen(false)} disabled={isCancelling}>Keep MRS</Button>
+                                      <Button type="button" variant="outline" onClick={() => setCancelOpen(false)} disabled={isCancelling}>Keep Stock Requisition</Button>
                                       <Button type="button" variant="destructive" disabled={!cancelReason.trim() || isCancelling} onClick={() => void handleCancelMRS()}>{isCancelling ? 'Cancelling…' : 'Confirm Cancellation'}</Button>
+                                    </DialogFooter>
+                                  </DialogContent>
+                                </Dialog>
+                                <Dialog open={disapproveOpen} onOpenChange={open => {
+                                  if (!isDisapproving) setDisapproveOpen(open);
+                                }}>
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>Disapprove Stock Requisition {selectedMRS.mrsNumber}?</DialogTitle>
+                                      <DialogDescription>This requisition cannot be approved or issued unless it is reworked and resubmitted.</DialogDescription>
+                                    </DialogHeader>
+                                    <Textarea value={disapproveReason} onChange={event => setDisapproveReason(event.target.value)} maxLength={2000} placeholder="Disapproval reason (required)" />
+                                    <DialogFooter>
+                                      <Button type="button" variant="outline" onClick={() => setDisapproveOpen(false)} disabled={isDisapproving}>Keep Requisition</Button>
+                                      <Button type="button" variant="destructive" disabled={!disapproveReason.trim() || isDisapproving} onClick={() => void handleDisapproveMRS()}>{isDisapproving ? 'Disapproving…' : 'Confirm Disapproval'}</Button>
                                     </DialogFooter>
                                   </DialogContent>
                                 </Dialog>

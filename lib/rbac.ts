@@ -59,11 +59,11 @@ export const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key:
     { key: 'work-orders:approve', label: 'Manage Job Order progress' },
     { key: 'work-orders:mrrf:approve', label: 'Approve MRRF' },
   ] },
-  { label: 'Material Requisitions', permissions: [
-    { key: 'mrs:view', label: 'View MRS' },
-    { key: 'mrs:create', label: 'Create MRS' },
-    { key: 'mrs:approve', label: 'Approve MRS' },
-    { key: 'mrs:issue', label: 'Issue MRS' },
+  { label: 'Stock Requisitions', permissions: [
+    { key: 'mrs:view', label: 'View Stock Requisitions' },
+    { key: 'mrs:create', label: 'Create Stock Requisitions' },
+    { key: 'mrs:approve', label: 'Approve Stock Requisitions' },
+    { key: 'mrs:issue', label: 'Issue Stock Requisitions' },
   ] },
   { label: 'Inventory', permissions: [
     { key: 'inventory:view', label: 'View inventory' },
@@ -99,6 +99,7 @@ export const MRRF_APPROVER_ROLES: readonly Role[] = [
   'ADMIN',
   'SUPER_ADMIN',
 ];
+export const REQUEST_DISAPPROVER_ROLES = MRRF_APPROVER_ROLES;
 
 const adminPermissions: Permission[] = ALL_PERMISSIONS.filter(permission => permission !== 'users:create-super-admin');
 const accountingPermissions: Permission[] = ALL_PERMISSIONS.filter(permission =>
@@ -152,11 +153,26 @@ export const can = (role: Role | null | undefined, permission: Permission, grant
   return permissions.includes(permission);
 };
 
+export const canDisapproveRequest = (
+  role: Role | null | undefined,
+  permission: 'mrs:approve' | 'work-orders:approve',
+  granted?: readonly Permission[],
+) => Boolean(role && REQUEST_DISAPPROVER_ROLES.includes(role) && can(role, permission, granted));
+
 export const warehouseForRole = (role: Role | null | undefined): Warehouse | null => {
   if (role === 'FARM_WH_SUPERVISOR' || role === 'FARM_WH_PERSONNEL') return 'FARM';
   if (role === 'ENGINEERING_SUPERVISOR' || role === 'ENGINEERING_WH_PERSONNEL') return 'ENGINEERING';
   return null;
 };
+
+const farmSubLocations = ['Container Van', 'Farm Warehouse (SC)'] as const;
+const engineeringSubLocations = ['Eng. Warehouse', 'Fabrication Area', "Eng. Manager's Office", 'Farm Warehouse (SC)'] as const;
+
+export function stockSubLocationsForRole(role: Role | null | undefined, warehouse: Warehouse): string[] {
+  if (role === 'FARM_WH_PERSONNEL' || role === 'FARM_WH_SUPERVISOR') return [...farmSubLocations];
+  if (role === 'ENGINEERING_WH_PERSONNEL' || role === 'ENGINEERING_SUPERVISOR') return [...engineeringSubLocations];
+  return warehouse === 'FARM' ? [...farmSubLocations] : [...engineeringSubLocations];
+}
 
 export const canManageUser = (actor: Role, target: Role) =>
   actor === 'SUPER_ADMIN' || (actor === 'ADMIN' && target !== 'SUPER_ADMIN');

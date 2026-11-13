@@ -28,6 +28,8 @@ pnpm run db:push
 
 Do not run `db:push` as part of a Netlify build or against the existing MySQL database. The Neon production database now contains the imported snapshot; the MySQL source remains unchanged.
 
+The Prisma schema already uses unique indexes for Work Order numbers, MRS numbers, and item codes. It also defines indexes for Work Order status/date, MRS status/date and Work Order links, stock by warehouse/item, and Stock Movement item/warehouse/type/date queries. Prisma's `warehouse` field is an enum, not a `warehouseId`. Apply any new or changed schema indexes to a reviewed Neon branch first; only push them to production after confirming the generated schema diff and planning the deployment.
+
 ## Deploy on Netlify
 
 Connect the repository to Netlify and use the standard Next.js build command:
